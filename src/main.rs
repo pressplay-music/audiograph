@@ -1,4 +1,4 @@
-use petgraph::graph::{DiGraph, NodeIndex};
+use petgraph::graph::{DiGraph, EdgeIndex, NodeIndex};
 use petgraph::visit::EdgeRef;
 use petgraph::Direction;
 use std::collections::HashMap;
@@ -16,11 +16,15 @@ impl MultiChannelBuffer {
     }
 }
 
+#[derive(Clone)]
+pub struct ChannelLayout {}
+
 pub trait Processor {
     fn process(
         &mut self,
         input_buffer: &MultiChannelBuffer,
         output_buffer: &mut MultiChannelBuffer,
+        channel_layout: ChannelLayout,
     );
 }
 
@@ -40,20 +44,25 @@ impl ProcessorNode {
         &mut self,
         input_buffer: &MultiChannelBuffer,
         output_buffer: &mut MultiChannelBuffer,
+        channel_layout: ChannelLayout,
     ) {
-        self.processor.process(input_buffer, output_buffer);
+        self.processor
+            .process(input_buffer, output_buffer, channel_layout);
     }
 }
 
-pub struct AudioEdge {}
-impl AudioEdge {
-    pub fn edge_info(&self) {
-        // Get some content
+pub struct ProcessorChannel {
+    pub channel_layout: ChannelLayout,
+}
+
+impl ProcessorChannel {
+    pub fn get_layout(&self) -> ChannelLayout {
+        self.channel_layout.clone()
     }
 }
 
 pub struct DspGraph {
-    graph: DiGraph<ProcessorNode, AudioEdge>,
+    graph: DiGraph<ProcessorNode, ProcessorChannel>,
     topo_order: Vec<NodeIndex>, // Precomputed processing order
     buffers: Vec<MultiChannelBuffer>,
     buffer_map: HashMap<NodeIndex, usize>,
@@ -86,11 +95,21 @@ impl DspGraph {
         node_index
     }
 
-    pub fn connect(&mut self, from: NodeIndex, to: NodeIndex) {
-        let edge = AudioEdge {};
-        self.graph.add_edge(from, to, edge);
+    pub fn connect(
+        &mut self,
+        from: NodeIndex,
+        to: NodeIndex,
+        channel_layout: ChannelLayout,
+    ) -> EdgeIndex {
+        let edge = ProcessorChannel { channel_layout };
+        let endge_index = self.graph.add_edge(from, to, edge);
+        self.recompute_topo_order();
 
-        // Precompute topological order for real-time safety
+        endge_index
+    }
+
+    pub fn disconnect(&mut self, edge: EdgeIndex) {
+        let _result = self.graph.remove_edge(edge);
         self.recompute_topo_order();
     }
 
@@ -112,7 +131,7 @@ impl DspGraph {
             .get(&entry_node_index)
             .and_then(|&i| self.buffers.get_mut(i))
             .unwrap();
-        entry_node.process(input, output_buffer);
+        entry_node.process(input, output_buffer, ChannelLayout {});
 
         // Process remaining nodes
         for &node_index in self.topo_order.iter().skip(1) {
@@ -135,9 +154,11 @@ impl DspGraph {
                 let output_buffer = &mut self.buffers[*output_buffer_index];
 
                 let processor_node = self.graph.node_weight_mut(node_index).unwrap();
-                processor_node
-                    .processor
-                    .process(&self.summing_buffer, output_buffer);
+                processor_node.processor.process(
+                    &self.summing_buffer,
+                    output_buffer,
+                    ChannelLayout {}, // TODO: get from edges
+                );
             } else {
                 let input_node = self
                     .graph
@@ -157,12 +178,12 @@ impl DspGraph {
                     .edges_directed(node_index, Direction::Incoming)
                     .next()
                     .unwrap();
-                let _info = edge.weight().edge_info();
+                let layout = edge.weight().get_layout();
 
                 let processor_node = self.graph.node_weight_mut(node_index).unwrap();
                 processor_node
                     .processor
-                    .process(input_buffer, output_buffer);
+                    .process(input_buffer, output_buffer, layout);
             }
         }
 
@@ -180,6 +201,7 @@ impl Processor for FooProcessor {
         &mut self,
         _input_buffer: &MultiChannelBuffer,
         _output_buffer: &mut MultiChannelBuffer,
+        _layout: ChannelLayout,
     ) {
         println!("FooProcessor processing");
     }
@@ -190,6 +212,7 @@ impl Processor for BarProcessor {
         &mut self,
         _input_buffer: &MultiChannelBuffer,
         _output_buffer: &mut MultiChannelBuffer,
+        _layout: ChannelLayout,
     ) {
         println!("BarProcessor processing");
     }
@@ -200,6 +223,7 @@ impl Processor for BazProcessor {
         &mut self,
         _input_buffer: &MultiChannelBuffer,
         _output_buffer: &mut MultiChannelBuffer,
+        _layout: ChannelLayout,
     ) {
         println!("BazProcessor processing");
     }
@@ -210,18 +234,18 @@ fn main() {
 
     let foo = graph.add_processor(FooProcessor {}, MultiChannelBuffer {});
     let bar1 = graph.add_processor(BarProcessor {}, MultiChannelBuffer {});
-    graph.connect(foo, bar1);
+    graph.connect(foo, bar1, ChannelLayout {});
 
     let baz = graph.add_processor(BazProcessor {}, MultiChannelBuffer {});
-    graph.connect(bar1, baz);
+    graph.connect(bar1, baz, ChannelLayout {});
 
     let bar2 = graph.add_processor(BarProcessor {}, MultiChannelBuffer {});
-    graph.connect(foo, bar2);
-    graph.connect(bar2, baz);
+    graph.connect(foo, bar2, ChannelLayout {});
+    graph.connect(bar2, baz, ChannelLayout {});
 
     let bar3 = graph.add_processor(BarProcessor {}, MultiChannelBuffer {});
-    graph.connect(foo, bar3);
-    graph.connect(bar3, baz);
+    graph.connect(foo, bar3, ChannelLayout {});
+    graph.connect(bar3, baz, ChannelLayout {});
 
     let input = MultiChannelBuffer {};
     let mut output = MultiChannelBuffer {};
