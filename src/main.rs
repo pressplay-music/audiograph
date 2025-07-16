@@ -260,7 +260,6 @@ impl DspGraph {
                     let output_buffer = &mut self.buffers[*output_buffer_index];
                     (input, output_buffer)
                 } else {
-                    // TODO: is this correct???!!! The order of buffers is not recomputed as the topo order
                     let input_buffer_index = self.buffer_map.get(&input_node).unwrap();
                     let (low, high) = self.buffers.split_at_mut(*output_buffer_index);
                     (&low[*input_buffer_index], &mut high[0])
