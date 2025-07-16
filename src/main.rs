@@ -29,9 +29,13 @@ impl MultiChannelBuffer {
         // Clear all channels
     }
 
-    pub fn add(&mut self, _other: &MultiChannelBuffer) {
+    pub fn add(&mut self, other: &MultiChannelBuffer) {
         // Add other buffer to self
         println!("Adding buffer");
+        self.data
+            .iter_mut()
+            .zip(other.data.iter())
+            .for_each(|(a, b)| *a += *b);
     }
 
     pub fn new(size: usize) -> Self {
@@ -63,6 +67,12 @@ impl Processor for PassThrough {
             .data
             .copy_from_slice(&context.input_buffer.data);
     }
+}
+
+pub struct NoOp;
+
+impl Processor for NoOp {
+    fn process(&mut self, _context: &mut ProcessingContext) {}
 }
 
 /// Represents an audio processing node
@@ -107,24 +117,28 @@ pub struct DspGraph {
     topo_order: Vec<NodeIndex>, // Precomputed processing order
     buffers: Vec<MultiChannelBuffer>,
     buffer_map: HashMap<NodeIndex, usize>,
-    input_edges: Vec<(NodeIndex, ChannelLayout)>, // Nodes that receive from input
-    output_edges: Vec<(NodeIndex, ChannelLayout)>, // Nodes that send to output
+    input_node: NodeIndex,
+    output_node: NodeIndex,
     summing_buffer: MultiChannelBuffer,
 }
 
+// TODO buffers and buffer_map could be merged into one HashMap<NodeIndex, MultiChannelBuffer>
 impl DspGraph {
-    pub fn new() -> Self {
-        Self {
+    pub fn new(buffer_size: usize) -> Self {
+        let mut graph = DspGraph {
             graph: DiGraph::new(),
             topo_order: Vec::new(),
             buffers: Vec::new(),
             buffer_map: HashMap::new(),
-            input_edges: Vec::new(),
-            output_edges: Vec::new(),
-            summing_buffer: MultiChannelBuffer {
-                data: vec![0.0; 256].into_boxed_slice(),
-            },
-        }
+            input_node: NodeIndex::end(),
+            output_node: NodeIndex::end(),
+            summing_buffer: MultiChannelBuffer::new(buffer_size),
+        };
+
+        graph.input_node = graph.add_processor(NoOp, MultiChannelBuffer::new(0));
+        graph.output_node = graph.add_processor(NoOp, MultiChannelBuffer::new(0));
+
+        graph
     }
 
     pub fn add_processor<T: Processor + Send + 'static>(
@@ -142,37 +156,34 @@ impl DspGraph {
         node_index
     }
 
+    // TODO: error handling, node indices must exist, return Result not Option
     pub fn connect(
         &mut self,
         from: GraphNode,
         to: GraphNode,
         channel_layout: ChannelLayout,
     ) -> Option<EdgeIndex> {
-        match (from, to) {
+        let edge_index = match (from, to) {
             (GraphNode::Input, GraphNode::Node(node_idx)) => {
-                self.input_edges.push((node_idx, channel_layout));
-                None
-            }
-            (GraphNode::Input, GraphNode::Output) => {
-                let passthrough_buffer = MultiChannelBuffer {
-                    data: vec![0.0; 256].into_boxed_slice(), // TODO: buffer size should be stored in the graph
-                };
-                let passthrough_node = self.add_processor(PassThrough, passthrough_buffer);
-
-                // Connect Input -> PassThrough -> Output
-                self.input_edges
-                    .push((passthrough_node, channel_layout.clone()));
-                self.output_edges.push((passthrough_node, channel_layout));
-                None
+                let edge = ProcessorChannel { channel_layout };
+                let edge_index = self.graph.add_edge(self.input_node, node_idx, edge);
+                Some(edge_index)
             }
             (GraphNode::Node(node_idx), GraphNode::Output) => {
-                self.output_edges.push((node_idx, channel_layout));
-                None
+                let edge = ProcessorChannel { channel_layout };
+                let edge_index = self.graph.add_edge(node_idx, self.output_node, edge);
+                Some(edge_index)
             }
             (GraphNode::Node(from_idx), GraphNode::Node(to_idx)) => {
                 let edge = ProcessorChannel { channel_layout };
                 let edge_index = self.graph.add_edge(from_idx, to_idx, edge);
-                self.recompute_topo_order();
+                Some(edge_index)
+            }
+            (GraphNode::Input, GraphNode::Output) => {
+                let edge = ProcessorChannel { channel_layout };
+                let edge_index = self.graph.add_edge(self.input_node, self.output_node, edge);
+                let input_node = self.graph.node_weight_mut(self.input_node).unwrap();
+                *input_node = ProcessorNode::new(PassThrough);
                 Some(edge_index)
             }
             // Invalid combinations
@@ -181,7 +192,10 @@ impl DspGraph {
             | (GraphNode::Output, _) => {
                 panic!("Invalid connection: {:?} -> {:?}", from, to);
             }
-        }
+        };
+
+        self.recompute_topo_order();
+        edge_index
     }
 
     pub fn disconnect(&mut self, edge: EdgeIndex) {
@@ -195,26 +209,15 @@ impl DspGraph {
             .expect("Graph has cycles! Ensure DAG structure.");
     }
 
-    /// Processes the graph using provided input and output buffers.
     pub fn process(&mut self, input: &MultiChannelBuffer, output: &mut MultiChannelBuffer) {
-        // Phase 1: Input phase - feed input to all entry nodes
-        for (node_idx, channel_layout) in &self.input_edges {
-            let output_buffer = self
-                .buffer_map
-                .get(node_idx)
-                .and_then(|&i| self.buffers.get_mut(i))
-                .unwrap();
+        output.clear();
 
-            let processor_node = self.graph.node_weight_mut(*node_idx).unwrap();
-            processor_node.process(input, output_buffer, channel_layout.clone());
-        }
-
-        // Phase 2: Process graph in topological order
         for &node_index in &self.topo_order {
-            // Skip nodes that were already processed in input phase
-            if self.input_edges.iter().any(|(idx, _)| *idx == node_index) {
+            if node_index == self.output_node {
                 continue;
             }
+
+            let output_buffer_index = self.buffer_map.get(&node_index).unwrap();
 
             let num_incoming_edges = self
                 .graph
@@ -226,16 +229,20 @@ impl DspGraph {
                 self.summing_buffer.clear();
                 for edge in self.graph.edges_directed(node_index, Direction::Incoming) {
                     let input_node = edge.source();
-                    let input_buffer_index = self.buffer_map.get(&input_node).unwrap();
-                    let input_buffer = &self.buffers[*input_buffer_index];
+                    let input_buffer = if input_node == self.input_node {
+                        input
+                    } else {
+                        let input_buffer_index = self.buffer_map.get(&input_node).unwrap();
+                        &self.buffers[*input_buffer_index]
+                    };
                     self.summing_buffer.add(input_buffer);
                 }
 
-                let output_buffer_index = self.buffer_map.get(&node_index).unwrap();
                 let output_buffer = &mut self.buffers[*output_buffer_index];
 
                 let processor_node = self.graph.node_weight_mut(node_index).unwrap();
 
+                // TODO: which layout?
                 let mut context = ProcessingContext {
                     input_buffer: &self.summing_buffer,
                     output_buffer,
@@ -249,12 +256,15 @@ impl DspGraph {
                     .next()
                     .unwrap();
 
-                let input_buffer_index = self.buffer_map.get(&input_node).unwrap();
-                let output_buffer_index = self.buffer_map.get(&node_index).unwrap();
-
-                let (low, high) = self.buffers.split_at_mut(*output_buffer_index);
-                let input_buffer = &low[*input_buffer_index];
-                let output_buffer = &mut high[0];
+                let (input_buffer, output_buffer) = if input_node == self.input_node {
+                    let output_buffer = &mut self.buffers[*output_buffer_index];
+                    (input, output_buffer)
+                } else {
+                    // TODO: is this correct???!!! The order of buffers is not recomputed as the topo order
+                    let input_buffer_index = self.buffer_map.get(&input_node).unwrap();
+                    let (low, high) = self.buffers.split_at_mut(*output_buffer_index);
+                    (&low[*input_buffer_index], &mut high[0])
+                };
 
                 let edge = self
                     .graph
@@ -270,98 +280,89 @@ impl DspGraph {
                     channel_layout,
                 });
             }
-            // If no incoming edges, this node was processed in input phase or is isolated
         }
 
-        // Phase 3: Output phase - collect from all exit nodes
-        output.clear();
-        for (node_idx, _channel_layout) in &self.output_edges {
-            let node_buffer = self
-                .buffer_map
-                .get(node_idx)
-                .and_then(|&i| self.buffers.get(i))
-                .unwrap();
-            output.add(node_buffer);
+        for node in self
+            .graph
+            .neighbors_directed(self.output_node, Direction::Incoming)
+        {
+            let input_buffer = if node == self.input_node {
+                input
+            } else {
+                let input_buffer_index = self.buffer_map.get(&node).unwrap();
+                &self.buffers[*input_buffer_index]
+            };
+            output.add(input_buffer);
         }
     }
 }
 
-struct FooProcessor {}
-struct BarProcessor {}
-struct BazProcessor {}
+struct FourtyTwo {}
 
-impl Processor for FooProcessor {
+impl Processor for FourtyTwo {
     fn process(&mut self, context: &mut ProcessingContext) {
-        context.output_buffer.clear();
         println!("FooProcessor processing");
+        context.output_buffer.data.fill(42.0);
     }
 }
 
-impl Processor for BarProcessor {
-    fn process(&mut self, _context: &mut ProcessingContext) {
-        println!("BarProcessor processing");
-    }
-}
-
-impl Processor for BazProcessor {
-    fn process(&mut self, _context: &mut ProcessingContext) {
-        println!("BazProcessor processing");
-    }
-}
-
-fn main() {
-    let mut graph = DspGraph::new();
-
-    let foo = graph.add_processor(
-        FooProcessor {},
-        MultiChannelBuffer {
-            data: vec![0.0; 256].into_boxed_slice(),
-        },
-    );
-    let bar1 = graph.add_processor(
-        BarProcessor {},
-        MultiChannelBuffer {
-            data: vec![0.0; 256].into_boxed_slice(),
-        },
-    );
-    graph.connect(foo.into(), bar1.into(), ChannelLayout {});
-
-    let baz = graph.add_processor(
-        BazProcessor {},
-        MultiChannelBuffer {
-            data: vec![0.0; 256].into_boxed_slice(),
-        },
-    );
-    graph.connect(bar1.into(), baz.into(), ChannelLayout {});
-
-    let bar2 = graph.add_processor(
-        BarProcessor {},
-        MultiChannelBuffer {
-            data: vec![0.0; 256].into_boxed_slice(),
-        },
-    );
-    graph.connect(foo.into(), bar2.into(), ChannelLayout {});
-    graph.connect(bar2.into(), baz.into(), ChannelLayout {});
-
-    let bar3 = graph.add_processor(
-        BarProcessor {},
-        MultiChannelBuffer {
-            data: vec![0.0; 256].into_boxed_slice(),
-        },
-    );
-    graph.connect(foo.into(), bar3.into(), ChannelLayout {});
-    graph.connect(bar3.into(), baz.into(), ChannelLayout {});
-
-    // Connect input to foo and output from baz
-    graph.connect(GraphNode::Input, foo.into(), ChannelLayout {});
-    graph.connect(baz.into(), GraphNode::Output, ChannelLayout {});
+#[test]
+fn test_simple_graph() {
+    let mut graph = DspGraph::new(10);
+    let fourty_two = graph.add_processor(FourtyTwo {}, MultiChannelBuffer::new(10));
+    graph.connect(GraphNode::Input, fourty_two.into(), ChannelLayout {});
+    graph.connect(fourty_two.into(), GraphNode::Output, ChannelLayout {});
 
     let input = MultiChannelBuffer {
-        data: vec![0.0; 256].into_boxed_slice(),
+        data: vec![0.0; 10].into_boxed_slice(),
     };
     let mut output = MultiChannelBuffer {
-        data: vec![0.0; 256].into_boxed_slice(),
+        data: vec![0.0; 10].into_boxed_slice(),
+    };
+    graph.process(&input, &mut output);
+
+    output.data.iter().for_each(|&x| {
+        assert_eq!(x, 42.0);
+    });
+}
+
+#[test]
+fn test_passthrough() {
+    let mut graph = DspGraph::new(10);
+    graph.connect(GraphNode::Input, GraphNode::Output, ChannelLayout {});
+    let input = MultiChannelBuffer {
+        data: vec![2.0; 10].into_boxed_slice(),
+    };
+    let mut output = MultiChannelBuffer {
+        data: vec![0.0; 10].into_boxed_slice(),
+    };
+    graph.process(&input, &mut output);
+
+    output.data.iter().for_each(|&x| {
+        assert_eq!(x, 2.0);
+    });
+}
+
+#[test]
+fn test_sum_at_output() {
+    let mut graph = DspGraph::new(10);
+    graph.connect(GraphNode::Input, GraphNode::Output, ChannelLayout {});
+    let fourty_two = graph.add_processor(FourtyTwo {}, MultiChannelBuffer::new(10));
+    graph.connect(GraphNode::Input, fourty_two.into(), ChannelLayout {});
+    graph.connect(fourty_two.into(), GraphNode::Output, ChannelLayout {});
+
+    let input = MultiChannelBuffer {
+        data: vec![2.0; 10].into_boxed_slice(),
+    };
+    let mut output = MultiChannelBuffer {
+        data: vec![0.0; 10].into_boxed_slice(),
     };
 
     graph.process(&input, &mut output);
+
+    output.data.iter().for_each(|&x| {
+        assert_eq!(x, 44.0);
+    });
 }
+
+fn main() {}
