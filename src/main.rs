@@ -3,7 +3,13 @@ use petgraph::visit::EdgeRef;
 use petgraph::Direction;
 use std::collections::HashMap;
 
-pub struct MultiChannelBuffer {}
+pub trait AudioBuffer {
+    fn clear(&mut self);
+}
+
+pub struct MultiChannelBuffer {
+    data: Box<[f32]>,
+}
 
 impl MultiChannelBuffer {
     pub fn clear(&mut self) {
@@ -16,16 +22,17 @@ impl MultiChannelBuffer {
     }
 }
 
+pub struct ProcessingContext<'a> {
+    input_buffer: &'a MultiChannelBuffer,
+    output_buffer: &'a mut MultiChannelBuffer,
+    channel_layout: ChannelLayout,
+}
+
 #[derive(Clone)]
 pub struct ChannelLayout {}
 
 pub trait Processor {
-    fn process(
-        &mut self,
-        input_buffer: &MultiChannelBuffer,
-        output_buffer: &mut MultiChannelBuffer,
-        channel_layout: ChannelLayout,
-    );
+    fn process(&mut self, context: &mut ProcessingContext);
 }
 
 /// Represents an audio processing node
@@ -46,8 +53,12 @@ impl ProcessorNode {
         output_buffer: &mut MultiChannelBuffer,
         channel_layout: ChannelLayout,
     ) {
-        self.processor
-            .process(input_buffer, output_buffer, channel_layout);
+        let mut context = ProcessingContext {
+            input_buffer,
+            output_buffer,
+            channel_layout,
+        };
+        self.processor.process(&mut context);
     }
 }
 
@@ -76,7 +87,9 @@ impl DspGraph {
             topo_order: Vec::new(),
             buffers: Vec::new(),
             buffer_map: HashMap::new(),
-            summing_buffer: MultiChannelBuffer {},
+            summing_buffer: MultiChannelBuffer {
+                data: vec![0.0; 256].into_boxed_slice(),
+            },
         }
     }
 
@@ -154,11 +167,13 @@ impl DspGraph {
                 let output_buffer = &mut self.buffers[*output_buffer_index];
 
                 let processor_node = self.graph.node_weight_mut(node_index).unwrap();
-                processor_node.processor.process(
-                    &self.summing_buffer,
+
+                let mut context = ProcessingContext {
+                    input_buffer: &self.summing_buffer,
                     output_buffer,
-                    ChannelLayout {}, // TODO: get from edges
-                );
+                    channel_layout: ChannelLayout {},
+                };
+                processor_node.processor.process(&mut context);
             } else {
                 let input_node = self
                     .graph
@@ -178,12 +193,14 @@ impl DspGraph {
                     .edges_directed(node_index, Direction::Incoming)
                     .next()
                     .unwrap();
-                let layout = edge.weight().get_layout();
+                let channel_layout = edge.weight().get_layout();
 
                 let processor_node = self.graph.node_weight_mut(node_index).unwrap();
-                processor_node
-                    .processor
-                    .process(input_buffer, output_buffer, layout);
+                processor_node.processor.process(&mut ProcessingContext {
+                    input_buffer,
+                    output_buffer,
+                    channel_layout,
+                });
             }
         }
 
@@ -197,34 +214,20 @@ struct BarProcessor {}
 struct BazProcessor {}
 
 impl Processor for FooProcessor {
-    fn process(
-        &mut self,
-        _input_buffer: &MultiChannelBuffer,
-        _output_buffer: &mut MultiChannelBuffer,
-        _layout: ChannelLayout,
-    ) {
+    fn process(&mut self, context: &mut ProcessingContext) {
+        context.output_buffer.clear();
         println!("FooProcessor processing");
     }
 }
 
 impl Processor for BarProcessor {
-    fn process(
-        &mut self,
-        _input_buffer: &MultiChannelBuffer,
-        _output_buffer: &mut MultiChannelBuffer,
-        _layout: ChannelLayout,
-    ) {
+    fn process(&mut self, _context: &mut ProcessingContext) {
         println!("BarProcessor processing");
     }
 }
 
 impl Processor for BazProcessor {
-    fn process(
-        &mut self,
-        _input_buffer: &MultiChannelBuffer,
-        _output_buffer: &mut MultiChannelBuffer,
-        _layout: ChannelLayout,
-    ) {
+    fn process(&mut self, _context: &mut ProcessingContext) {
         println!("BazProcessor processing");
     }
 }
@@ -232,23 +235,52 @@ impl Processor for BazProcessor {
 fn main() {
     let mut graph = DspGraph::new();
 
-    let foo = graph.add_processor(FooProcessor {}, MultiChannelBuffer {});
-    let bar1 = graph.add_processor(BarProcessor {}, MultiChannelBuffer {});
+    let foo = graph.add_processor(
+        FooProcessor {},
+        MultiChannelBuffer {
+            data: vec![0.0; 256].into_boxed_slice(),
+        },
+    );
+    let bar1 = graph.add_processor(
+        BarProcessor {},
+        MultiChannelBuffer {
+            data: vec![0.0; 256].into_boxed_slice(),
+        },
+    );
     graph.connect(foo, bar1, ChannelLayout {});
 
-    let baz = graph.add_processor(BazProcessor {}, MultiChannelBuffer {});
+    let baz = graph.add_processor(
+        BazProcessor {},
+        MultiChannelBuffer {
+            data: vec![0.0; 256].into_boxed_slice(),
+        },
+    );
     graph.connect(bar1, baz, ChannelLayout {});
 
-    let bar2 = graph.add_processor(BarProcessor {}, MultiChannelBuffer {});
+    let bar2 = graph.add_processor(
+        BarProcessor {},
+        MultiChannelBuffer {
+            data: vec![0.0; 256].into_boxed_slice(),
+        },
+    );
     graph.connect(foo, bar2, ChannelLayout {});
     graph.connect(bar2, baz, ChannelLayout {});
 
-    let bar3 = graph.add_processor(BarProcessor {}, MultiChannelBuffer {});
+    let bar3 = graph.add_processor(
+        BarProcessor {},
+        MultiChannelBuffer {
+            data: vec![0.0; 256].into_boxed_slice(),
+        },
+    );
     graph.connect(foo, bar3, ChannelLayout {});
     graph.connect(bar3, baz, ChannelLayout {});
 
-    let input = MultiChannelBuffer {};
-    let mut output = MultiChannelBuffer {};
+    let input = MultiChannelBuffer {
+        data: vec![0.0; 256].into_boxed_slice(),
+    };
+    let mut output = MultiChannelBuffer {
+        data: vec![0.0; 256].into_boxed_slice(),
+    };
 
     graph.process(&input, &mut output);
 }
