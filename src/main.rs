@@ -18,26 +18,34 @@ impl From<NodeIndex> for GraphNode {
 
 pub trait AudioBuffer {
     fn clear(&mut self);
+    fn data(&self) -> &[f32];
+    fn data_mut(&mut self) -> &mut [f32];
+
+    fn add(&mut self, other: &dyn AudioBuffer) {
+        self.data_mut()
+            .iter_mut()
+            .zip(other.data().iter())
+            .for_each(|(a, b)| *a += *b);
+    }
 }
 
 pub struct MultiChannelBuffer {
-    pub data: Box<[f32]>,
+    data: Box<[f32]>,
+}
+
+impl AudioBuffer for MultiChannelBuffer {
+    fn clear(&mut self) {
+        self.data.fill(0.0);
+    }
+    fn data(&self) -> &[f32] {
+        &self.data
+    }
+    fn data_mut(&mut self) -> &mut [f32] {
+        &mut self.data
+    }
 }
 
 impl MultiChannelBuffer {
-    pub fn clear(&mut self) {
-        // Clear all channels
-    }
-
-    pub fn add(&mut self, other: &MultiChannelBuffer) {
-        // Add other buffer to self
-        println!("Adding buffer");
-        self.data
-            .iter_mut()
-            .zip(other.data.iter())
-            .for_each(|(a, b)| *a += *b);
-    }
-
     pub fn new(size: usize) -> Self {
         Self {
             data: vec![0.0; size].into_boxed_slice(),
@@ -45,9 +53,25 @@ impl MultiChannelBuffer {
     }
 }
 
+pub struct MultiChannelBufferView<'a> {
+    data: &'a mut [f32],
+}
+
+impl<'a> AudioBuffer for MultiChannelBufferView<'a> {
+    fn clear(&mut self) {
+        self.data.fill(0.0);
+    }
+    fn data(&self) -> &[f32] {
+        &self.data
+    }
+    fn data_mut(&mut self) -> &mut [f32] {
+        &mut self.data
+    }
+}
+
 pub struct ProcessingContext<'a> {
-    input_buffer: &'a MultiChannelBuffer,
-    output_buffer: &'a mut MultiChannelBuffer,
+    input_buffer: &'a dyn AudioBuffer,
+    output_buffer: &'a mut dyn AudioBuffer,
     channel_layout: ChannelLayout,
 }
 
@@ -64,8 +88,8 @@ impl Processor for PassThrough {
     fn process(&mut self, context: &mut ProcessingContext) {
         context
             .output_buffer
-            .data
-            .copy_from_slice(&context.input_buffer.data);
+            .data_mut()
+            .copy_from_slice(context.input_buffer.data());
     }
 }
 
@@ -87,18 +111,8 @@ impl ProcessorNode {
         }
     }
 
-    pub fn process(
-        &mut self,
-        input_buffer: &MultiChannelBuffer,
-        output_buffer: &mut MultiChannelBuffer,
-        channel_layout: ChannelLayout,
-    ) {
-        let mut context = ProcessingContext {
-            input_buffer,
-            output_buffer,
-            channel_layout,
-        };
-        self.processor.process(&mut context);
+    pub fn process(&mut self, context: &mut ProcessingContext) {
+        self.processor.process(context);
     }
 }
 
@@ -122,7 +136,6 @@ pub struct DspGraph {
     summing_buffer: MultiChannelBuffer,
 }
 
-// TODO buffers and buffer_map could be merged into one HashMap<NodeIndex, MultiChannelBuffer>
 impl DspGraph {
     pub fn new(buffer_size: usize) -> Self {
         let mut graph = DspGraph {
@@ -209,7 +222,7 @@ impl DspGraph {
             .expect("Graph has cycles! Ensure DAG structure.");
     }
 
-    pub fn process(&mut self, input: &MultiChannelBuffer, output: &mut MultiChannelBuffer) {
+    pub fn process(&mut self, input: &dyn AudioBuffer, output: &mut dyn AudioBuffer) {
         output.clear();
 
         for &node_index in &self.topo_order {
@@ -229,7 +242,7 @@ impl DspGraph {
                 self.summing_buffer.clear();
                 for edge in self.graph.edges_directed(node_index, Direction::Incoming) {
                     let input_node = edge.source();
-                    let input_buffer = if input_node == self.input_node {
+                    let input_buffer: &dyn AudioBuffer = if input_node == self.input_node {
                         input
                     } else {
                         let input_buffer_index = self.buffer_map.get(&input_node).unwrap();
@@ -238,8 +251,7 @@ impl DspGraph {
                     self.summing_buffer.add(input_buffer);
                 }
 
-                let output_buffer = &mut self.buffers[*output_buffer_index];
-
+                let output_buffer: &mut dyn AudioBuffer = &mut self.buffers[*output_buffer_index];
                 let processor_node = self.graph.node_weight_mut(node_index).unwrap();
 
                 // TODO: which layout?
@@ -248,7 +260,7 @@ impl DspGraph {
                     output_buffer,
                     channel_layout: ChannelLayout {},
                 };
-                processor_node.processor.process(&mut context);
+                processor_node.process(&mut context);
             } else if num_incoming_edges == 1 {
                 let input_node = self
                     .graph
@@ -256,14 +268,15 @@ impl DspGraph {
                     .next()
                     .unwrap();
 
-                let (input_buffer, output_buffer) = if input_node == self.input_node {
-                    let output_buffer = &mut self.buffers[*output_buffer_index];
-                    (input, output_buffer)
-                } else {
-                    let input_buffer_index = self.buffer_map.get(&input_node).unwrap();
-                    let (low, high) = self.buffers.split_at_mut(*output_buffer_index);
-                    (&low[*input_buffer_index], &mut high[0])
-                };
+                let (input_buffer, output_buffer): (&dyn AudioBuffer, &mut dyn AudioBuffer) =
+                    if input_node == self.input_node {
+                        let output_buffer = &mut self.buffers[*output_buffer_index];
+                        (input, output_buffer)
+                    } else {
+                        let input_buffer_index = self.buffer_map.get(&input_node).unwrap();
+                        let (low, high) = self.buffers.split_at_mut(*output_buffer_index);
+                        (&low[*input_buffer_index], &mut high[0])
+                    };
 
                 let edge = self
                     .graph
@@ -273,11 +286,12 @@ impl DspGraph {
                 let channel_layout = edge.weight().get_layout();
 
                 let processor_node = self.graph.node_weight_mut(node_index).unwrap();
-                processor_node.processor.process(&mut ProcessingContext {
+                let mut context = ProcessingContext {
                     input_buffer,
                     output_buffer,
                     channel_layout,
-                });
+                };
+                processor_node.process(&mut context);
             }
         }
 
@@ -285,7 +299,7 @@ impl DspGraph {
             .graph
             .neighbors_directed(self.output_node, Direction::Incoming)
         {
-            let input_buffer = if node == self.input_node {
+            let input_buffer: &dyn AudioBuffer = if node == self.input_node {
                 input
             } else {
                 let input_buffer_index = self.buffer_map.get(&node).unwrap();
@@ -296,12 +310,12 @@ impl DspGraph {
     }
 }
 
-struct FourtyTwo {}
+pub struct FourtyTwo {}
 
 impl Processor for FourtyTwo {
     fn process(&mut self, context: &mut ProcessingContext) {
         println!("FooProcessor processing");
-        context.output_buffer.data.fill(42.0);
+        context.output_buffer.data_mut().fill(42.0);
     }
 }
 
