@@ -8,7 +8,8 @@ use crate::channel::ChannelLayout;
 use crate::processor::{NoOp, PassThrough, ProcessingContext, Processor};
 use crate::sample::Sample;
 
-use petgraph::graph::{DiGraph, EdgeIndex, NodeIndex};
+use petgraph::graph::{EdgeIndex, NodeIndex};
+use petgraph::stable_graph::StableDiGraph;
 use petgraph::visit::EdgeRef;
 use petgraph::Direction;
 
@@ -55,7 +56,7 @@ impl ProcessorChannel {
 }
 
 pub struct DspGraph<T: Sample> {
-    graph: DiGraph<ProcessorNode<T>, ProcessorChannel>,
+    graph: StableDiGraph<ProcessorNode<T>, ProcessorChannel>,
     topo_order: Vec<NodeIndex>, // Precomputed processing order
     buffers: Vec<MultiChannelBuffer<T>>,
     buffer_map: HashMap<NodeIndex, usize>,
@@ -67,7 +68,7 @@ pub struct DspGraph<T: Sample> {
 impl<T: Sample> DspGraph<T> {
     pub fn new(num_channels: usize, frame_size: FrameSize) -> Self {
         let mut graph = DspGraph {
-            graph: DiGraph::new(),
+            graph: StableDiGraph::with_capacity(1024, 1024),
             topo_order: Vec::new(),
             buffers: Vec::new(),
             buffer_map: HashMap::new(),
