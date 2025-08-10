@@ -1,8 +1,4 @@
-use crate::{
-    buffer::{iter_channels, iter_channels_mut, AudioBuffer},
-    channel::ChannelLayout,
-    sample::Sample,
-};
+use crate::{buffer::AudioBuffer, channel::ChannelLayout, sample::Sample};
 
 pub trait Processor<T: Sample> {
     fn process(&mut self, context: &mut ProcessingContext<T>);
@@ -17,11 +13,10 @@ pub struct ProcessingContext<'a, T: Sample> {
 pub struct PassThrough;
 
 impl<T: Sample> Processor<T> for PassThrough {
-    // TODO: find way to implement channel iterators
     fn process(&mut self, context: &mut ProcessingContext<T>) {
-        for (input_channel, output_channel) in
-            iter_channels(context.input_buffer).zip(iter_channels_mut(context.output_buffer))
-        {
+        for channel in context.channel_layout.iter() {
+            let input_channel = context.input_buffer.channel(channel).unwrap();
+            let output_channel = context.output_buffer.channel_mut(channel).unwrap();
             output_channel.copy_from_slice(input_channel);
         }
     }

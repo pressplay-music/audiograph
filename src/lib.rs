@@ -65,6 +65,7 @@ pub struct DspGraph<T: Sample> {
 }
 
 impl<T: Sample> DspGraph<T> {
+    // TODO: change argument order
     pub fn new(frame_size: usize, num_channels: usize) -> Self {
         let mut graph = DspGraph {
             graph: DiGraph::new(),
@@ -98,6 +99,7 @@ impl<T: Sample> DspGraph<T> {
     }
 
     // TODO: error handling, node indices must exist, return Result not Option
+    // TODO: channel layout optional?
     pub fn connect(
         &mut self,
         from: GraphNode,
@@ -176,6 +178,8 @@ impl<T: Sample> DspGraph<T> {
                         let input_buffer_index = self.buffer_map.get(&input_node).unwrap();
                         &self.buffers[*input_buffer_index]
                     };
+
+                    // TODO: handle disconnected channels?
                     self.summing_buffer
                         .add(input_buffer, edge.weight().get_layout());
                 }
@@ -242,6 +246,7 @@ impl<T: Sample> DspGraph<T> {
                 let input_buffer_index = self.buffer_map.get(&node).unwrap();
                 &self.buffers[*input_buffer_index]
             };
+            // TODO: handle disconnected channels
             output.add(node_buffer, edge.weight().get_layout());
         }
     }
@@ -268,8 +273,16 @@ impl Processor<f32> for FourtyTwo {
 fn test_simple_graph() {
     let mut graph = DspGraph::<f32>::new(10, 1);
     let fourty_two = graph.add_processor(FourtyTwo {}, MultiChannelBuffer::new(1, 10));
-    graph.connect(GraphNode::Input, fourty_two.into(), ChannelLayout {});
-    graph.connect(fourty_two.into(), GraphNode::Output, ChannelLayout {});
+    graph.connect(
+        GraphNode::Input,
+        fourty_two.into(),
+        ChannelLayout::default(),
+    );
+    graph.connect(
+        fourty_two.into(),
+        GraphNode::Output,
+        ChannelLayout::default(),
+    );
 
     let input = MultiChannelBuffer::new(1, 10);
     let mut output = MultiChannelBuffer::new(1, 10);
@@ -283,7 +296,11 @@ fn test_simple_graph() {
 #[test]
 fn test_passthrough() {
     let mut graph = DspGraph::<f32>::new(10, 1);
-    graph.connect(GraphNode::Input, GraphNode::Output, ChannelLayout {});
+    graph.connect(
+        GraphNode::Input,
+        GraphNode::Output,
+        ChannelLayout::default(),
+    );
     let mut input = MultiChannelBuffer::new(1, 10);
     input.channel_mut(0).unwrap().fill(2.0);
 
@@ -298,10 +315,22 @@ fn test_passthrough() {
 #[test]
 fn test_sum_at_output() {
     let mut graph = DspGraph::<f32>::new(10, 1);
-    graph.connect(GraphNode::Input, GraphNode::Output, ChannelLayout {});
+    graph.connect(
+        GraphNode::Input,
+        GraphNode::Output,
+        ChannelLayout::default(),
+    );
     let fourty_two = graph.add_processor(FourtyTwo {}, MultiChannelBuffer::new(1, 10));
-    graph.connect(GraphNode::Input, fourty_two.into(), ChannelLayout {});
-    graph.connect(fourty_two.into(), GraphNode::Output, ChannelLayout {});
+    graph.connect(
+        GraphNode::Input,
+        fourty_two.into(),
+        ChannelLayout::default(),
+    );
+    graph.connect(
+        fourty_two.into(),
+        GraphNode::Output,
+        ChannelLayout::default(),
+    );
 
     let mut input = MultiChannelBuffer::new(1, 10);
     input.channel_mut(0).unwrap().fill(2.0);
