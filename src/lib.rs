@@ -10,7 +10,7 @@ use crate::sample::Sample;
 
 use petgraph::graph::{EdgeIndex, NodeIndex};
 use petgraph::stable_graph::StableDiGraph;
-use petgraph::visit::EdgeRef;
+use petgraph::visit::{DfsPostOrder, EdgeRef};
 use petgraph::Direction;
 
 use std::collections::HashMap;
@@ -55,30 +55,39 @@ impl ProcessorChannel {
     }
 }
 
+type GraphVisitMap<T> =
+    <StableDiGraph<ProcessorNode<T>, ProcessorChannel> as petgraph::visit::Visitable>::Map;
+
 pub struct DspGraph<T: Sample> {
     graph: StableDiGraph<ProcessorNode<T>, ProcessorChannel>,
-    topo_order: Vec<NodeIndex>, // Precomputed processing order
+    topo_order: Vec<NodeIndex>, // Pre-allocated processing order vector
     buffers: Vec<MultiChannelBuffer<T>>,
     buffer_map: HashMap<NodeIndex, usize>,
     input_node: NodeIndex,
     output_node: NodeIndex,
     summing_buffer: MultiChannelBuffer<T>,
+    dfs_visitor: DfsPostOrder<NodeIndex, GraphVisitMap<T>>,
+    topo_dirty: bool,
 }
 
 impl<T: Sample> DspGraph<T> {
     pub fn new(num_channels: usize, frame_size: FrameSize) -> Self {
         let mut graph = DspGraph {
             graph: StableDiGraph::with_capacity(1024, 1024),
-            topo_order: Vec::new(),
+            topo_order: Vec::with_capacity(1024),
             buffers: Vec::new(),
             buffer_map: HashMap::new(),
             input_node: NodeIndex::end(),
             output_node: NodeIndex::end(),
             summing_buffer: MultiChannelBuffer::new(num_channels, frame_size),
+            dfs_visitor: DfsPostOrder::default(),
+            topo_dirty: true,
         };
 
         graph.input_node = graph.add_processor(NoOp, MultiChannelBuffer::new(0, FrameSize(0)));
         graph.output_node = graph.add_processor(NoOp, MultiChannelBuffer::new(0, FrameSize(0)));
+
+        graph.dfs_visitor = DfsPostOrder::empty(&graph.graph);
 
         graph
     }
@@ -94,6 +103,8 @@ impl<T: Sample> DspGraph<T> {
         let buffer_index = self.buffers.len();
         self.buffers.push(output_buffer);
         self.buffer_map.insert(node_index, buffer_index);
+
+        self.topo_dirty = true;
 
         node_index
     }
@@ -137,22 +148,40 @@ impl<T: Sample> DspGraph<T> {
             }
         };
 
-        self.recompute_topo_order();
+        self.topo_dirty = true;
         edge_index
     }
 
     pub fn disconnect(&mut self, edge: EdgeIndex) {
         let _result = self.graph.remove_edge(edge);
-        self.recompute_topo_order();
+        self.topo_dirty = true;
     }
 
-    fn recompute_topo_order(&mut self) {
-        // TODO: propagate graph error (e.g. cycles)
-        self.topo_order = petgraph::algo::toposort(&self.graph, None)
-            .expect("Graph has cycles! Ensure DAG structure.");
+    fn ensure_topo_order_updated(&mut self) {
+        if self.topo_dirty {
+            self.topo_order.clear(); // clear but keep allocated size
+
+            for start_node in self
+                .graph
+                .neighbors_directed(self.output_node, Direction::Incoming)
+            {
+                self.dfs_visitor.reset(&self.graph);
+                self.dfs_visitor.move_to(start_node);
+
+                // Traverse graph and collect nodes in topological order
+                while let Some(node) = self.dfs_visitor.next(&self.graph) {
+                    self.topo_order.push(node);
+                }
+            }
+
+            self.topo_dirty = false;
+        }
     }
 
     pub fn process(&mut self, input: &dyn AudioBuffer<T>, output: &mut dyn AudioBuffer<T>) {
+        // updates node order if necessary
+        self.ensure_topo_order_updated();
+
         output.clear();
 
         for &node_index in &self.topo_order {
