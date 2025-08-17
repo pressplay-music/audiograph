@@ -15,6 +15,8 @@ use petgraph::Direction;
 
 use std::collections::HashMap;
 
+pub type AudioGraphError = &'static str;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GraphNode {
     Input,
@@ -71,12 +73,13 @@ pub struct DspGraph<T: Sample> {
 }
 
 impl<T: Sample> DspGraph<T> {
-    pub fn new(num_channels: usize, frame_size: FrameSize) -> Self {
+    pub fn new(num_channels: usize, frame_size: FrameSize, max_num_edges: Option<usize>) -> Self {
+        let max_num_edges = max_num_edges.unwrap_or(64);
         let mut graph = DspGraph {
-            graph: StableDiGraph::with_capacity(1024, 1024),
-            topo_order: Vec::with_capacity(1024),
-            buffers: Vec::new(),
-            buffer_map: HashMap::new(),
+            graph: StableDiGraph::with_capacity(max_num_edges, max_num_edges),
+            topo_order: Vec::with_capacity(max_num_edges),
+            buffers: Vec::with_capacity(max_num_edges),
+            buffer_map: HashMap::with_capacity(max_num_edges),
             input_node: NodeIndex::end(),
             output_node: NodeIndex::end(),
             summing_buffer: MultiChannelBuffer::new(num_channels, frame_size),
@@ -84,8 +87,12 @@ impl<T: Sample> DspGraph<T> {
             topo_dirty: true,
         };
 
-        graph.input_node = graph.add_processor(NoOp, MultiChannelBuffer::new(0, FrameSize(0)));
-        graph.output_node = graph.add_processor(NoOp, MultiChannelBuffer::new(0, FrameSize(0)));
+        graph.input_node = graph
+            .add_processor(NoOp, MultiChannelBuffer::new(0, FrameSize(0)))
+            .unwrap();
+        graph.output_node = graph
+            .add_processor(NoOp, MultiChannelBuffer::new(0, FrameSize(0)))
+            .unwrap();
 
         graph.dfs_visitor = DfsPostOrder::empty(&graph.graph);
 
@@ -96,70 +103,72 @@ impl<T: Sample> DspGraph<T> {
         &mut self,
         processor: P,
         output_buffer: MultiChannelBuffer<T>,
-    ) -> NodeIndex {
+    ) -> Result<NodeIndex, AudioGraphError> {
+        let buffer_index = self.buffers.len();
+
+        if buffer_index >= self.buffers.capacity() {
+            return Err("Buffer capacity exceeded");
+        }
+
         let node_index = self.graph.add_node(ProcessorNode::new(processor));
 
-        // Store buffer and map NodeIndex -> Vec index
-        let buffer_index = self.buffers.len();
         self.buffers.push(output_buffer);
         self.buffer_map.insert(node_index, buffer_index);
 
         self.topo_dirty = true;
 
-        node_index
+        Ok(node_index)
     }
 
-    // TODO: error handling, node indices must exist, return Result not Option
-    // TODO: channel layout optional?
     pub fn connect(
         &mut self,
         from: GraphNode,
         to: GraphNode,
-        channel_layout: ChannelLayout,
-    ) -> Option<EdgeIndex> {
+        channel_layout: Option<ChannelLayout>,
+    ) -> Result<EdgeIndex, AudioGraphError> {
+        let channel_layout = channel_layout.unwrap_or_default();
         let edge_index = match (from, to) {
             (GraphNode::Input, GraphNode::Node(node_idx)) => {
                 let edge = ProcessorChannel { channel_layout };
                 let edge_index = self.graph.add_edge(self.input_node, node_idx, edge);
-                Some(edge_index)
+                Ok(edge_index)
             }
             (GraphNode::Node(node_idx), GraphNode::Output) => {
                 let edge = ProcessorChannel { channel_layout };
                 let edge_index = self.graph.add_edge(node_idx, self.output_node, edge);
-                Some(edge_index)
+                Ok(edge_index)
             }
             (GraphNode::Node(from_idx), GraphNode::Node(to_idx)) => {
                 let edge = ProcessorChannel { channel_layout };
                 let edge_index = self.graph.add_edge(from_idx, to_idx, edge);
-                Some(edge_index)
+                Ok(edge_index)
             }
             (GraphNode::Input, GraphNode::Output) => {
                 let edge = ProcessorChannel { channel_layout };
                 let edge_index = self.graph.add_edge(self.input_node, self.output_node, edge);
                 let input_node = self.graph.node_weight_mut(self.input_node).unwrap();
                 *input_node = ProcessorNode::new(PassThrough);
-                Some(edge_index)
+                Ok(edge_index)
             }
             // Invalid combinations
             (GraphNode::Input, GraphNode::Input)
             | (GraphNode::Node(_), GraphNode::Input)
-            | (GraphNode::Output, _) => {
-                panic!("Invalid connection: {:?} -> {:?}", from, to);
-            }
+            | (GraphNode::Output, _) => Err("Invalid connection"),
         };
 
         self.topo_dirty = true;
         edge_index
     }
 
-    pub fn disconnect(&mut self, edge: EdgeIndex) {
-        let _result = self.graph.remove_edge(edge);
+    pub fn disconnect(&mut self, edge: EdgeIndex) -> Result<(), AudioGraphError> {
+        self.graph.remove_edge(edge).ok_or("Edge not found")?;
         self.topo_dirty = true;
+        Ok(())
     }
 
     fn ensure_topo_order_updated(&mut self) {
         if self.topo_dirty {
-            self.topo_order.clear(); // clear but keep allocated size
+            self.topo_order.clear(); // clear but keep preallocated size
 
             for start_node in self
                 .graph
@@ -179,8 +188,7 @@ impl<T: Sample> DspGraph<T> {
     }
 
     pub fn process(&mut self, input: &dyn AudioBuffer<T>, output: &mut dyn AudioBuffer<T>) {
-        // updates node order if necessary
-        self.ensure_topo_order_updated();
+        self.ensure_topo_order_updated(); // update node order if necessary
 
         output.clear();
 
@@ -300,18 +308,16 @@ impl Processor<f32> for FourtyTwo {
 
 #[test]
 fn test_simple_graph() {
-    let mut graph = DspGraph::<f32>::new(1, FrameSize(10));
-    let fourty_two = graph.add_processor(FourtyTwo {}, MultiChannelBuffer::new(1, FrameSize(10)));
-    graph.connect(
-        GraphNode::Input,
-        fourty_two.into(),
-        ChannelLayout::default(),
-    );
-    graph.connect(
-        fourty_two.into(),
-        GraphNode::Output,
-        ChannelLayout::default(),
-    );
+    let mut graph = DspGraph::<f32>::new(1, FrameSize(10), None);
+    let fourty_two = graph
+        .add_processor(FourtyTwo {}, MultiChannelBuffer::new(1, FrameSize(10)))
+        .unwrap();
+    graph
+        .connect(GraphNode::Input, fourty_two.into(), None)
+        .unwrap();
+    graph
+        .connect(fourty_two.into(), GraphNode::Output, None)
+        .unwrap();
 
     let input = MultiChannelBuffer::new(1, FrameSize(10));
     let mut output = MultiChannelBuffer::new(1, FrameSize(10));
@@ -324,12 +330,10 @@ fn test_simple_graph() {
 
 #[test]
 fn test_passthrough() {
-    let mut graph = DspGraph::<f32>::new(1, FrameSize(10));
-    graph.connect(
-        GraphNode::Input,
-        GraphNode::Output,
-        ChannelLayout::default(),
-    );
+    let mut graph = DspGraph::<f32>::new(1, FrameSize(10), None);
+    graph
+        .connect(GraphNode::Input, GraphNode::Output, None)
+        .unwrap();
     let mut input = MultiChannelBuffer::new(1, FrameSize(10));
     input.channel_mut(0).unwrap().fill(2.0);
 
@@ -343,23 +347,19 @@ fn test_passthrough() {
 
 #[test]
 fn test_sum_at_output() {
-    let mut graph = DspGraph::<f32>::new(1, FrameSize(10));
-    graph.connect(
-        GraphNode::Input,
-        GraphNode::Output,
-        ChannelLayout::default(),
-    );
-    let fourty_two = graph.add_processor(FourtyTwo {}, MultiChannelBuffer::new(1, FrameSize(10)));
-    graph.connect(
-        GraphNode::Input,
-        fourty_two.into(),
-        ChannelLayout::default(),
-    );
-    graph.connect(
-        fourty_two.into(),
-        GraphNode::Output,
-        ChannelLayout::default(),
-    );
+    let mut graph = DspGraph::<f32>::new(1, FrameSize(10), None);
+    graph
+        .connect(GraphNode::Input, GraphNode::Output, None)
+        .unwrap();
+    let fourty_two = graph
+        .add_processor(FourtyTwo {}, MultiChannelBuffer::new(1, FrameSize(10)))
+        .unwrap();
+    graph
+        .connect(GraphNode::Input, fourty_two.into(), None)
+        .unwrap();
+    graph
+        .connect(fourty_two.into(), GraphNode::Output, None)
+        .unwrap();
 
     let mut input = MultiChannelBuffer::new(1, FrameSize(10));
     input.channel_mut(0).unwrap().fill(2.0);
