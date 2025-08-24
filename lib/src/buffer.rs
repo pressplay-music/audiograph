@@ -12,6 +12,16 @@ pub trait AudioBuffer<T: Sample> {
     fn channel_mut(&mut self, index: usize) -> Option<&mut [T]>;
 
     fn clear(&mut self);
+
+    fn copy_to_interleaved(&self, output: &mut [T]) {
+        for channel in 0..self.num_channels() {
+            let src_channel = self.channel(channel).unwrap();
+            for (frame, &sample) in src_channel.iter().enumerate() {
+                output[frame * self.num_channels() + channel] = sample;
+            }
+        }
+    }
+
     fn add(&mut self, other: &dyn AudioBuffer<T>, channel_layout: ChannelLayout) {
         let max_num_channels = self.num_channels().min(other.num_channels());
         for channel in channel_layout.iter() {
@@ -76,6 +86,15 @@ impl<T: Sample> AudioBuffer<T> for MultiChannelBuffer<T> {
 pub struct MultiChannelBufferView<'a, T: Sample> {
     channels: &'a [Box<[T]>],
     num_frames: FrameSize,
+}
+
+impl<'a, T: Sample> MultiChannelBufferView<'a, T> {
+    pub fn new(channels: &'a [Box<[T]>], num_frames: FrameSize) -> Self {
+        Self {
+            channels,
+            num_frames,
+        }
+    }
 }
 
 impl<T: Sample> AudioBuffer<T> for MultiChannelBufferView<'_, T> {
