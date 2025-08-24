@@ -1,7 +1,7 @@
-mod buffer;
-mod channel;
-mod processor;
-mod sample;
+pub mod buffer;
+pub mod channel;
+pub mod processor;
+pub mod sample;
 
 use crate::buffer::{AudioBuffer, FrameSize, MultiChannelBuffer};
 use crate::channel::ChannelLayout;

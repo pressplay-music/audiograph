@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "sine"
-path = "sine.rs"
+name = "cpal_sine"
+path = "cpal_sine.rs"
 
 [dependencies]
 audiograph = { path = "../lib" }

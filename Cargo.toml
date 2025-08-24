@@ -1,3 +1,4 @@
 [workspace]
 members = ["lib", "examples"]
 default-members = ["lib"]
+resolver = "2"

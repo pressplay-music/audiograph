@@ -4,7 +4,10 @@
 
 - [ ] Write Readme
 - [ ] Write comparison to DASP graph
-- [ ] Write examples using CPAL, custom processor nodes, different topologies
+- [x] Write example using CPAL and custom processor nodes
+- [ ] Write example that uses buffer views
+- [ ] Write example that makes use of different channel layouts per edge
+- [ ] deal with channel layout connections and buffer max channel mismatch
 - [ ] Review realtime safety
 - [ ] Add license
 - [ ] cleanup commit history if necessary
