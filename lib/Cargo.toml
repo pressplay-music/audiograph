@@ -1,0 +1,9 @@
+[package]
+name = "audiograph"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bitvec = "1.0.1"
+num = "0.4.3"
+petgraph = "0.7.1"
