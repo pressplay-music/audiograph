@@ -10,7 +10,7 @@ use crate::sample::Sample;
 
 use petgraph::graph::{EdgeIndex, NodeIndex};
 use petgraph::stable_graph::StableDiGraph;
-use petgraph::visit::{DfsPostOrder, EdgeRef};
+use petgraph::visit::{DfsPostOrder, EdgeRef, Reversed};
 use petgraph::Direction;
 
 use std::collections::HashMap;
@@ -170,15 +170,14 @@ impl<T: Sample> DspGraph<T> {
         if self.topo_dirty {
             self.topo_order.clear(); // clear but keep preallocated size
 
+            self.dfs_visitor.reset(&self.graph);
+            let reversed = Reversed(&self.graph);
             for start_node in self
                 .graph
                 .neighbors_directed(self.output_node, Direction::Incoming)
             {
-                self.dfs_visitor.reset(&self.graph);
                 self.dfs_visitor.move_to(start_node);
-
-                // Traverse graph and collect nodes in topological order
-                while let Some(node) = self.dfs_visitor.next(&self.graph) {
+                while let Some(node) = self.dfs_visitor.next(&reversed) {
                     self.topo_order.push(node);
                 }
             }
@@ -290,84 +289,193 @@ impl<T: Sample> DspGraph<T> {
 }
 
 #[cfg(test)]
-struct FourtyTwo {}
+mod tests {
+    use super::*;
 
-#[cfg(test)]
-impl Processor<f32> for FourtyTwo {
-    fn process(&mut self, context: &mut ProcessingContext<f32>) {
-        println!("FooProcessor processing");
-        for channel in 0..context.output_buffer.num_channels() {
-            context
-                .output_buffer
-                .channel_mut(channel)
-                .unwrap()
-                .fill(42.0);
+    struct FourtyTwo {}
+
+    impl Processor<f32> for FourtyTwo {
+        fn process(&mut self, context: &mut ProcessingContext<f32>) {
+            for channel in 0..context.output_buffer.num_channels() {
+                context
+                    .output_buffer
+                    .channel_mut(channel)
+                    .unwrap()
+                    .fill(42.0);
+            }
         }
     }
-}
 
-#[test]
-fn test_simple_graph() {
-    let mut graph = DspGraph::<f32>::new(1, FrameSize(10), None);
-    let fourty_two = graph
-        .add_processor(FourtyTwo {}, MultiChannelBuffer::new(1, FrameSize(10)))
-        .unwrap();
-    graph
-        .connect(GraphNode::Input, fourty_two.into(), None)
-        .unwrap();
-    graph
-        .connect(fourty_two.into(), GraphNode::Output, None)
-        .unwrap();
+    #[test]
+    fn test_simple_graph() {
+        let mut graph = DspGraph::<f32>::new(1, FrameSize(10), None);
+        let fourty_two = graph
+            .add_processor(FourtyTwo {}, MultiChannelBuffer::new(1, FrameSize(10)))
+            .unwrap();
+        graph
+            .connect(GraphNode::Input, fourty_two.into(), None)
+            .unwrap();
+        graph
+            .connect(fourty_two.into(), GraphNode::Output, None)
+            .unwrap();
 
-    let input = MultiChannelBuffer::new(1, FrameSize(10));
-    let mut output = MultiChannelBuffer::new(1, FrameSize(10));
-    graph.process(&input, &mut output);
+        let input = MultiChannelBuffer::new(1, FrameSize(10));
+        let mut output = MultiChannelBuffer::new(1, FrameSize(10));
+        graph.process(&input, &mut output);
 
-    output.channel(0).unwrap().iter().for_each(|&x| {
-        assert_eq!(x, 42.0);
-    });
-}
+        output.channel(0).unwrap().iter().for_each(|&x| {
+            assert_eq!(x, 42.0);
+        });
+    }
 
-#[test]
-fn test_passthrough() {
-    let mut graph = DspGraph::<f32>::new(1, FrameSize(10), None);
-    graph
-        .connect(GraphNode::Input, GraphNode::Output, None)
-        .unwrap();
-    let mut input = MultiChannelBuffer::new(1, FrameSize(10));
-    input.channel_mut(0).unwrap().fill(2.0);
+    #[test]
+    fn test_passthrough() {
+        let mut graph = DspGraph::<f32>::new(1, FrameSize(10), None);
+        graph
+            .connect(GraphNode::Input, GraphNode::Output, None)
+            .unwrap();
+        let mut input = MultiChannelBuffer::new(1, FrameSize(10));
+        input.channel_mut(0).unwrap().fill(2.0);
 
-    let mut output = MultiChannelBuffer::new(1, FrameSize(10));
-    graph.process(&input, &mut output);
+        let mut output = MultiChannelBuffer::new(1, FrameSize(10));
+        graph.process(&input, &mut output);
 
-    output.channel(0).unwrap().iter().for_each(|&x| {
-        assert_eq!(x, 2.0);
-    });
-}
+        output.channel(0).unwrap().iter().for_each(|&x| {
+            assert_eq!(x, 2.0);
+        });
+    }
 
-#[test]
-fn test_sum_at_output() {
-    let mut graph = DspGraph::<f32>::new(1, FrameSize(10), None);
-    graph
-        .connect(GraphNode::Input, GraphNode::Output, None)
-        .unwrap();
-    let fourty_two = graph
-        .add_processor(FourtyTwo {}, MultiChannelBuffer::new(1, FrameSize(10)))
-        .unwrap();
-    graph
-        .connect(GraphNode::Input, fourty_two.into(), None)
-        .unwrap();
-    graph
-        .connect(fourty_two.into(), GraphNode::Output, None)
-        .unwrap();
+    #[test]
+    fn test_sum_at_output() {
+        let mut graph = DspGraph::<f32>::new(1, FrameSize(10), None);
+        graph
+            .connect(GraphNode::Input, GraphNode::Output, None)
+            .unwrap();
+        let fourty_two = graph
+            .add_processor(FourtyTwo {}, MultiChannelBuffer::new(1, FrameSize(10)))
+            .unwrap();
+        graph
+            .connect(GraphNode::Input, fourty_two.into(), None)
+            .unwrap();
+        graph
+            .connect(fourty_two.into(), GraphNode::Output, None)
+            .unwrap();
 
-    let mut input = MultiChannelBuffer::new(1, FrameSize(10));
-    input.channel_mut(0).unwrap().fill(2.0);
-    let mut output = MultiChannelBuffer::new(1, FrameSize(10));
+        let mut input = MultiChannelBuffer::new(1, FrameSize(10));
+        input.channel_mut(0).unwrap().fill(2.0);
+        let mut output = MultiChannelBuffer::new(1, FrameSize(10));
 
-    graph.process(&input, &mut output);
+        graph.process(&input, &mut output);
 
-    output.channel(0).unwrap().iter().for_each(|&x| {
-        assert_eq!(x, 44.0);
-    });
+        output.channel(0).unwrap().iter().for_each(|&x| {
+            assert_eq!(x, 44.0);
+        });
+    }
+
+    #[test]
+    fn test_partial_channel_routing() {
+        let mut graph = DspGraph::<f32>::new(3, FrameSize(10), None);
+        let fourty_two = graph
+            .add_processor(FourtyTwo {}, MultiChannelBuffer::new(3, FrameSize(10)))
+            .unwrap();
+
+        let passthrough = graph
+            .add_processor(PassThrough {}, MultiChannelBuffer::new(3, FrameSize(10)))
+            .unwrap();
+
+        // all 3 channels connected
+        graph
+            .connect(GraphNode::Input, fourty_two.into(), None)
+            .unwrap();
+
+        let mut second_channel_only = ChannelLayout::new(0); // Start with no channels
+        second_channel_only.connect(1);
+
+        graph
+            .connect(
+                fourty_two.into(),
+                passthrough.into(),
+                Some(second_channel_only),
+            )
+            .unwrap();
+
+        graph
+            .connect(passthrough.into(), GraphNode::Output, None)
+            .unwrap();
+
+        let mut input = MultiChannelBuffer::new(3, FrameSize(10));
+        input.channel_mut(0).unwrap().fill(1.0);
+        input.channel_mut(1).unwrap().fill(2.0);
+        input.channel_mut(2).unwrap().fill(3.0);
+
+        let mut output = MultiChannelBuffer::new(3, FrameSize(10));
+        graph.process(&input, &mut output);
+
+        // Only channel 1 should have the FourtyTwo output (42.0)
+        output.channel(0).unwrap().iter().for_each(|&x| {
+            assert_eq!(x, 0.0);
+        });
+        output.channel(1).unwrap().iter().for_each(|&x| {
+            assert_eq!(x, 42.0);
+        });
+        output.channel(2).unwrap().iter().for_each(|&x| {
+            assert_eq!(x, 0.0);
+        });
+    }
+
+    #[test]
+    fn test_processing_order_and_count() {
+        struct Adder {
+            value: f32,
+        }
+
+        impl Processor<f32> for Adder {
+            fn process(&mut self, context: &mut ProcessingContext<f32>) {
+                for ch in 0..context.output_buffer.num_channels() {
+                    let input_channel = context.input_buffer.channel(ch).unwrap();
+                    let output_channel = context.output_buffer.channel_mut(ch).unwrap();
+                    for (o, &i) in output_channel.iter_mut().zip(input_channel.iter()) {
+                        *o = i + self.value;
+                    }
+                }
+            }
+        }
+
+        let mut graph = DspGraph::<f32>::new(1, FrameSize(8), None);
+
+        let add1 = graph
+            .add_processor(
+                Adder { value: 1.0 },
+                MultiChannelBuffer::new(1, FrameSize(8)),
+            )
+            .unwrap();
+
+        let add3 = graph
+            .add_processor(
+                Adder { value: 3.0 },
+                MultiChannelBuffer::new(1, FrameSize(8)),
+            )
+            .unwrap();
+        let add5 = graph
+            .add_processor(
+                Adder { value: 5.0 },
+                MultiChannelBuffer::new(1, FrameSize(8)),
+            )
+            .unwrap();
+
+        graph.connect(GraphNode::Input, add1.into(), None).unwrap();
+        graph.connect(add1.into(), add3.into(), None).unwrap();
+        graph.connect(add1.into(), add5.into(), None).unwrap();
+        graph.connect(add3.into(), GraphNode::Output, None).unwrap();
+        graph.connect(add5.into(), GraphNode::Output, None).unwrap();
+
+        let input = MultiChannelBuffer::new(1, FrameSize(8));
+        let mut output = MultiChannelBuffer::new(1, FrameSize(8));
+
+        graph.process(&input, &mut output);
+
+        output.channel(0).unwrap().iter().for_each(|&x| {
+            assert_eq!(x, 10.0);
+        });
+    }
 }
