@@ -62,12 +62,10 @@ impl Gain {
 impl Processor<f32> for Gain {
     fn process(&mut self, context: &mut ProcessingContext<f32>) {
         for channel in context.channel_layout.iter() {
-            if let Some(input_channel) = context.input_buffer.channel(channel) {
-                if let Some(output_channel) = context.output_buffer.channel_mut(channel) {
-                    for (input, output) in input_channel.iter().zip(output_channel.iter_mut()) {
-                        *output = input * self.gain;
-                    }
-                }
+            let input_channel = context.input_buffer.channel(channel).unwrap();
+            let output_channel = context.output_buffer.channel_mut(channel).unwrap();
+            for (input, output) in input_channel.iter().zip(output_channel.iter_mut()) {
+                *output = input * self.gain;
             }
         }
     }

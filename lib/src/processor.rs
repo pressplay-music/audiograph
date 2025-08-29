@@ -10,6 +10,24 @@ pub struct ProcessingContext<'a, T: Sample> {
     pub channel_layout: ChannelLayout,
 }
 
+impl<'a, T: Sample> ProcessingContext<'a, T> {
+    pub fn new(
+        input_buffer: &'a dyn AudioBuffer<T>,
+        output_buffer: &'a mut dyn AudioBuffer<T>,
+        mut channel_layout: ChannelLayout,
+    ) -> Self {
+        let max_channels = input_buffer
+            .num_channels()
+            .min(output_buffer.num_channels());
+        channel_layout.clamp(max_channels);
+        Self {
+            input_buffer,
+            output_buffer,
+            channel_layout,
+        }
+    }
+}
+
 pub struct PassThrough;
 
 impl<T: Sample> Processor<T> for PassThrough {

@@ -231,11 +231,8 @@ impl<T: Sample> DspGraph<T> {
                     .get_layout();
                 let processor_node = self.graph.node_weight_mut(node_index).unwrap();
 
-                let mut context = ProcessingContext {
-                    input_buffer: &self.summing_buffer,
-                    output_buffer,
-                    channel_layout,
-                };
+                let mut context =
+                    ProcessingContext::new(&self.summing_buffer, output_buffer, channel_layout);
                 processor_node.process(&mut context);
             } else if num_incoming_edges == 1 {
                 let input_node = self
@@ -262,11 +259,8 @@ impl<T: Sample> DspGraph<T> {
                 let channel_layout = edge.weight().get_layout();
 
                 let processor_node = self.graph.node_weight_mut(node_index).unwrap();
-                let mut context = ProcessingContext {
-                    input_buffer,
-                    output_buffer,
-                    channel_layout,
-                };
+                let mut context =
+                    ProcessingContext::new(input_buffer, output_buffer, channel_layout);
                 processor_node.process(&mut context);
             }
         }

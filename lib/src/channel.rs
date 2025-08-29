@@ -44,15 +44,35 @@ impl<const NUM_CHANNELS: usize, const WORDS: usize> ChannelLayoutImpl<NUM_CHANNE
     pub fn iter(&self) -> IterOnes<'_, u64, bitvec::order::Lsb0> {
         self.bits.iter_ones()
     }
+
+    pub fn clamp(&mut self, max_channels: usize) {
+        self.bits.split_at_mut(max_channels).1.fill(false);
+    }
 }
 
-#[test]
-fn channel_layout_test() {
-    let layout = ChannelLayout::new(3);
-    assert!(layout.is_connected(0));
-    assert!(layout.is_connected(1));
-    assert!(layout.is_connected(2));
-    assert!(!layout.is_connected(3));
-    assert!(!layout.is_connected(63));
-    assert!(!layout.is_connected(64));
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_channel_layout_creation() {
+        let layout = ChannelLayout::new(3);
+        assert!(layout.is_connected(0));
+        assert!(layout.is_connected(1));
+        assert!(layout.is_connected(2));
+        assert!(!layout.is_connected(3));
+        assert!(!layout.is_connected(63));
+        assert!(!layout.is_connected(64));
+    }
+
+    #[test]
+    fn test_channel_layout_clamping() {
+        let mut layout = ChannelLayout::new(5);
+        layout.clamp(3);
+        assert!(layout.is_connected(0));
+        assert!(layout.is_connected(1));
+        assert!(layout.is_connected(2));
+        assert!(!layout.is_connected(3));
+        assert!(!layout.is_connected(4));
+    }
 }
