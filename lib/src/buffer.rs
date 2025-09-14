@@ -83,13 +83,19 @@ impl<T: Sample> AudioBuffer<T> for MultiChannelBuffer<T> {
     }
 }
 
+/// Non-owning view into a channel-based collection of audio samples.
+///
+/// Useful for zero-copy processing of immutable (input) audio data. Example:
+/// fn channel_based_callback<'a>(data: &[&[f32]]) {
+///     let buffer_view = MultiChannelBufferView::new(data, FrameSize(data[0].len()));
+/// }
 pub struct MultiChannelBufferView<'a, T: Sample> {
-    channels: &'a [Box<[T]>],
+    channels: &'a [&'a [T]],
     num_frames: FrameSize,
 }
 
 impl<'a, T: Sample> MultiChannelBufferView<'a, T> {
-    pub fn new(channels: &'a [Box<[T]>], num_frames: FrameSize) -> Self {
+    pub fn new(channels: &'a [&'a [T]], num_frames: FrameSize) -> Self {
         Self {
             channels,
             num_frames,
@@ -115,4 +121,51 @@ impl<T: Sample> AudioBuffer<T> for MultiChannelBufferView<'_, T> {
     }
 
     fn clear(&mut self) {}
+}
+
+/// Non-owning mutable view into a channel-based collection of audio samples.
+///
+/// Useful for zero-copy processing of mutable (output) audio data. Example:
+/// fn channel_based_callback<'a>(data: &'a mut [&'a mut [f32]]) {
+///     let mut mutable_buffer_view = MultiChannelBufferViewMut::new(data, FrameSize(data[0].len()));
+/// }
+pub struct MultiChannelBufferViewMut<'a, T: Sample> {
+    channels: &'a mut [&'a mut [T]],
+    num_frames: FrameSize,
+}
+
+impl<'a, T: Sample> MultiChannelBufferViewMut<'a, T> {
+    pub fn new(channels: &'a mut [&'a mut [T]], num_frames: FrameSize) -> Self {
+        assert!(!channels.is_empty());
+        Self {
+            channels,
+            num_frames,
+        }
+    }
+}
+
+impl<T: Sample> AudioBuffer<T> for MultiChannelBufferViewMut<'_, T> {
+    fn num_channels(&self) -> usize {
+        self.channels.len()
+    }
+
+    fn num_frames(&self) -> FrameSize {
+        self.num_frames
+    }
+
+    fn channel(&self, index: usize) -> Option<&[T]> {
+        self.channels.get(index).map(|b| &**b)
+    }
+
+    fn channel_mut(&mut self, index: usize) -> Option<&mut [T]> {
+        self.channels.get_mut(index).map(|b| &mut **b)
+    }
+
+    fn clear(&mut self) {
+        for channel in &mut *self.channels {
+            for sample in channel.iter_mut() {
+                *sample = T::zero();
+            }
+        }
+    }
 }
