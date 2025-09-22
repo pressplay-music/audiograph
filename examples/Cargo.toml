@@ -5,7 +5,11 @@ edition = "2021"
 
 [[bin]]
 name = "cpal_sine"
-path = "cpal_sine.rs"
+path = "src/cpal_sine.rs"
+
+[[bin]]
+name = "channel_layouts"
+path = "src/channel_layouts.rs"
 
 [dependencies]
 audiograph = { path = "../lib" }

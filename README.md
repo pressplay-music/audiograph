@@ -3,11 +3,12 @@
 ## Todos
 
 - [ ] Write Readme
+- [ ] allow more complex wiring
 - [ ] Write comparison to DASP graph
 - [x] Write example using CPAL and custom processor nodes
-- [ ] Write example that uses buffer views
 - [ ] Write example that makes use of different channel layouts per edge
 - [ ] deal with channel layout connections and buffer max channel mismatch
+- [ ] Processing context with less than iniitialized frames?
 - [ ] Review realtime safety
 - [ ] Add license
 - [ ] cleanup commit history if necessary

@@ -26,6 +26,14 @@ impl<const NUM_CHANNELS: usize, const WORDS: usize> ChannelLayoutImpl<NUM_CHANNE
         Self { bits }
     }
 
+    pub fn from_indices(indices: &[usize]) -> Self {
+        let mut layout = ChannelLayoutImpl::new(0);
+        for &index in indices {
+            layout.connect(index);
+        }
+        layout
+    }
+
     // TODO: return Result
     pub fn connect(&mut self, channel: usize) {
         if channel < NUM_CHANNELS {
