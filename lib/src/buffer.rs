@@ -22,12 +22,10 @@ pub trait AudioBuffer<T: Sample> {
         }
     }
 
-    fn add(&mut self, other: &dyn AudioBuffer<T>, channel_layout: ChannelLayout) {
+    fn add(&mut self, other: &dyn AudioBuffer<T>, mut channel_layout: ChannelLayout) {
         let max_num_channels = self.num_channels().min(other.num_channels());
+        channel_layout.clamp(max_num_channels);
         for channel in channel_layout.iter() {
-            if channel >= max_num_channels {
-                break;
-            }
             self.channel_mut(channel)
                 .unwrap()
                 .iter_mut()
@@ -167,5 +165,38 @@ impl<T: Sample> AudioBuffer<T> for MultiChannelBufferViewMut<'_, T> {
                 *sample = T::zero();
             }
         }
+    }
+}
+
+// Immutable AudioBuffer view that remaps channel indices
+pub struct RewiredBufferView<'a, T: Sample> {
+    pub buffer: &'a dyn AudioBuffer<T>,
+    pub rewire: &'a [usize],
+}
+
+impl<T: Sample> AudioBuffer<T> for RewiredBufferView<'_, T> {
+    fn num_channels(&self) -> usize {
+        self.rewire.len()
+    }
+
+    fn num_frames(&self) -> FrameSize {
+        self.buffer.num_frames()
+    }
+
+    fn channel(&self, index: usize) -> Option<&[T]> {
+        if index < self.rewire.len() {
+            let source_channel = self.rewire[index];
+            self.buffer.channel(source_channel)
+        } else {
+            None
+        }
+    }
+
+    fn channel_mut(&mut self, _index: usize) -> Option<&mut [T]> {
+        None
+    }
+
+    fn clear(&mut self) {
+        panic!("Cannot clear an immutable buffer view");
     }
 }

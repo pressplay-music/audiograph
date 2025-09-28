@@ -3,7 +3,7 @@ pub mod channel;
 pub mod processor;
 pub mod sample;
 
-use crate::buffer::{AudioBuffer, FrameSize, MultiChannelBuffer};
+use crate::buffer::{AudioBuffer, FrameSize, MultiChannelBuffer, RewiredBufferView};
 use crate::channel::ChannelLayout;
 use crate::processor::{NoOp, PassThrough, ProcessingContext, Processor};
 use crate::sample::Sample;
@@ -33,16 +33,32 @@ impl From<NodeIndex> for GraphNode {
 /// Represents an audio processing node
 struct ProcessorNode<T: Sample> {
     processor: Box<dyn Processor<T> + Send>,
+    pub rewire: Option<Vec<usize>>,
 }
 
 impl<T: Sample> ProcessorNode<T> {
     pub fn new(processor: impl Processor<T> + Send + 'static) -> Self {
         Self {
             processor: Box::new(processor),
+            rewire: None,
         }
     }
 
     pub fn process(&mut self, context: &mut ProcessingContext<T>) {
+        if let Some(rewire) = &self.rewire {
+            let rewired_buffer = RewiredBufferView {
+                buffer: context.input_buffer,
+                rewire,
+            };
+            let mut rewired_context = ProcessingContext::new(
+                &rewired_buffer,
+                context.output_buffer,
+                context.channel_layout.clone(),
+            );
+            self.processor.process(&mut rewired_context);
+            return;
+        }
+
         self.processor.process(context);
     }
 }
@@ -158,6 +174,14 @@ impl<T: Sample> DspGraph<T> {
 
         self.topo_dirty = true;
         edge_index
+    }
+
+    pub fn rewire(&mut self, node: NodeIndex, rewire: Vec<usize>) -> Result<(), AudioGraphError> {
+        if let Some(node) = self.graph.node_weight_mut(node) {
+            node.rewire = Some(rewire);
+            return Ok(());
+        }
+        Err("Node not found")
     }
 
     pub fn disconnect(&mut self, edge: EdgeIndex) -> Result<(), AudioGraphError> {

@@ -54,26 +54,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     dsp_graph.connect(
         sine_node.into(),
         left_gain_node.into(),
-        Some(ChannelLayout::from_indices(&[0])), // left channel
+        Some(ChannelLayout::new(1)), // first channel only (left)
     )?;
+
+    // change order of right node input channels
+    dsp_graph.rewire(right_gain_node, vec![1])?;
 
     dsp_graph.connect(
         sine_node.into(),
         right_gain_node.into(),
-        Some(ChannelLayout::from_indices(&[1])), // right channel
+        Some(ChannelLayout::new(1)), // first channel only (right channel after rewire)
     )?;
 
+    // TODO: summing into the right channel layout doesn't work yet
     dsp_graph.connect(
         left_gain_node.into(),
         output_gain_node.into(),
-        Some(ChannelLayout::from_indices(&[0])), // left channel
+        Some(ChannelLayout::new(1)), // left gain node has only one output channel
     )?;
 
-    dsp_graph.connect(
-        right_gain_node.into(),
-        output_gain_node.into(),
-        Some(ChannelLayout::from_indices(&[1])),
-    )?;
+    // dsp_graph.connect(
+    //     right_gain_node.into(),
+    //     output_gain_node.into(),
+    //     Some(ChannelLayout::from_indices(&[1])),
+    // )?;
 
     dsp_graph.connect(
         output_gain_node.into(),
