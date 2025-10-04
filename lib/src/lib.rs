@@ -33,41 +33,33 @@ impl From<NodeIndex> for GraphNode {
 /// Represents an audio processing node
 struct ProcessorNode<T: Sample> {
     processor: Box<dyn Processor<T> + Send>,
-    pub rewire: Option<Vec<usize>>,
 }
 
 impl<T: Sample> ProcessorNode<T> {
     pub fn new(processor: impl Processor<T> + Send + 'static) -> Self {
         Self {
             processor: Box::new(processor),
-            rewire: None,
         }
     }
 
     pub fn process(&mut self, context: &mut ProcessingContext<T>) {
-        if let Some(rewire) = &self.rewire {
-            let rewired_buffer = RewiredBufferView {
-                buffer: context.input_buffer,
-                rewire,
-            };
-            let mut rewired_context = ProcessingContext::new(
-                &rewired_buffer,
-                context.output_buffer,
-                context.channel_layout.clone(),
-            );
-            self.processor.process(&mut rewired_context);
-            return;
-        }
-
         self.processor.process(context);
     }
 }
 
 struct ProcessorChannel {
     pub channel_layout: ChannelLayout,
+    pub has_rewire: bool,
 }
 
 impl ProcessorChannel {
+    pub fn new(channel_layout: ChannelLayout) -> Self {
+        Self {
+            channel_layout,
+            has_rewire: false,
+        }
+    }
+
     pub fn get_layout(&self) -> ChannelLayout {
         self.channel_layout.clone()
     }
@@ -86,6 +78,7 @@ pub struct DspGraph<T: Sample> {
     summing_buffer: MultiChannelBuffer<T>,
     dfs_visitor: DfsPostOrder<NodeIndex, GraphVisitMap<T>>,
     topo_dirty: bool,
+    edge_rewires: HashMap<EdgeIndex, HashMap<usize, usize>>,
 }
 
 impl<T: Sample> DspGraph<T> {
@@ -101,6 +94,7 @@ impl<T: Sample> DspGraph<T> {
             summing_buffer: MultiChannelBuffer::new(num_channels, frame_size),
             dfs_visitor: DfsPostOrder::default(),
             topo_dirty: true,
+            edge_rewires: HashMap::with_capacity(max_num_edges),
         };
 
         graph.input_node = graph
@@ -131,7 +125,7 @@ impl<T: Sample> DspGraph<T> {
         self.buffers.push(output_buffer);
         self.buffer_map.insert(node_index, buffer_index);
 
-        self.topo_dirty = true;
+        self.topo_dirty = true; // TODO: only if connected?
 
         Ok(node_index)
     }
@@ -145,22 +139,22 @@ impl<T: Sample> DspGraph<T> {
         let channel_layout = channel_layout.unwrap_or_default();
         let edge_index = match (from, to) {
             (GraphNode::Input, GraphNode::Node(node_idx)) => {
-                let edge = ProcessorChannel { channel_layout };
+                let edge = ProcessorChannel::new(channel_layout);
                 let edge_index = self.graph.add_edge(self.input_node, node_idx, edge);
                 Ok(edge_index)
             }
             (GraphNode::Node(node_idx), GraphNode::Output) => {
-                let edge = ProcessorChannel { channel_layout };
+                let edge = ProcessorChannel::new(channel_layout);
                 let edge_index = self.graph.add_edge(node_idx, self.output_node, edge);
                 Ok(edge_index)
             }
             (GraphNode::Node(from_idx), GraphNode::Node(to_idx)) => {
-                let edge = ProcessorChannel { channel_layout };
+                let edge = ProcessorChannel::new(channel_layout);
                 let edge_index = self.graph.add_edge(from_idx, to_idx, edge);
                 Ok(edge_index)
             }
             (GraphNode::Input, GraphNode::Output) => {
-                let edge = ProcessorChannel { channel_layout };
+                let edge = ProcessorChannel::new(channel_layout);
                 let edge_index = self.graph.add_edge(self.input_node, self.output_node, edge);
                 let input_node = self.graph.node_weight_mut(self.input_node).unwrap();
                 *input_node = ProcessorNode::new(PassThrough);
@@ -176,16 +170,61 @@ impl<T: Sample> DspGraph<T> {
         edge_index
     }
 
-    pub fn rewire(&mut self, node: NodeIndex, rewire: Vec<usize>) -> Result<(), AudioGraphError> {
-        if let Some(node) = self.graph.node_weight_mut(node) {
-            node.rewire = Some(rewire);
-            return Ok(());
+    pub fn rewire(
+        &mut self,
+        edge_index: EdgeIndex,
+        rewire_mapping: &[(usize, usize)], // maps source channel to destination channel
+    ) -> Result<(), AudioGraphError> {
+        if let Some(edge) = self.graph.edge_weight_mut(edge_index) {
+            edge.has_rewire = true;
+
+            let mut channel_layout = ChannelLayout::new(0);
+            let rewire = self
+                .edge_rewires
+                .entry(edge_index)
+                .or_insert_with(HashMap::new);
+            rewire.clear();
+
+            for &(source, dest) in rewire_mapping {
+                channel_layout.connect(dest);
+
+                // we flip (source, dest) to have logical to physical mapping
+                rewire.insert(dest, source);
+            }
+
+            edge.channel_layout = channel_layout;
+
+            Ok(())
+        } else {
+            Err("Edge not found")
         }
-        Err("Node not found")
+    }
+
+    pub fn remove_rewire(&mut self, edge_index: EdgeIndex) -> Result<(), AudioGraphError> {
+        if let Some(edge) = self.graph.edge_weight_mut(edge_index) {
+            edge.has_rewire = false;
+            self.edge_rewires.remove(&edge_index);
+            Ok(())
+        } else {
+            Err("Edge not found")
+        }
+    }
+
+    pub fn connect_rewired(
+        &mut self,
+        from: GraphNode,
+        to: GraphNode,
+        wiring: &[(usize, usize)],
+    ) -> Result<EdgeIndex, AudioGraphError> {
+        let edge = self.connect(from, to, None)?;
+        self.rewire(edge, wiring)?;
+
+        Ok(edge)
     }
 
     pub fn disconnect(&mut self, edge: EdgeIndex) -> Result<(), AudioGraphError> {
         self.graph.remove_edge(edge).ok_or("Edge not found")?;
+        self.edge_rewires.remove(&edge); // Clean up rewiring data
         self.topo_dirty = true;
         Ok(())
     }
@@ -230,6 +269,8 @@ impl<T: Sample> DspGraph<T> {
             // If there are multiple inputs, sum them
             if num_incoming_edges > 1 {
                 self.summing_buffer.clear();
+                let mut channel_layout = ChannelLayout::new(0);
+
                 for edge in self.graph.edges_directed(node_index, Direction::Incoming) {
                     let input_node = edge.source();
                     let input_buffer: &dyn AudioBuffer<T> = if input_node == self.input_node {
@@ -239,31 +280,51 @@ impl<T: Sample> DspGraph<T> {
                         &self.buffers[*input_buffer_index]
                     };
 
-                    // TODO: handle disconnected channels?
-                    self.summing_buffer
-                        .add(input_buffer, edge.weight().get_layout());
+                    let edge_layout = edge.weight().get_layout();
+
+                    if edge.weight().has_rewire {
+                        if let Some(rewire) = self.edge_rewires.get(&edge.id()) {
+                            let rewired_buffer_view = RewiredBufferView {
+                                buffer: input_buffer,
+                                rewire,
+                            };
+                            self.summing_buffer
+                                .add(&rewired_buffer_view, edge_layout.clone());
+                        } else {
+                            self.summing_buffer.add(input_buffer, edge_layout.clone());
+                        }
+                    } else {
+                        self.summing_buffer.add(input_buffer, edge_layout.clone());
+                    }
+
+                    // Combine layouts
+                    // TODO: helper functions that operates on the bitset dierctly
+                    for channel in edge_layout.iter() {
+                        channel_layout.connect(channel);
+                    }
                 }
 
                 let output_buffer: &mut dyn AudioBuffer<T> =
                     &mut self.buffers[*output_buffer_index];
-                let channel_layout = self
-                    .graph
-                    .edges_directed(node_index, Direction::Incoming)
-                    .next()
-                    .unwrap()
-                    .weight()
-                    .get_layout();
                 let processor_node = self.graph.node_weight_mut(node_index).unwrap();
 
                 let mut context =
                     ProcessingContext::new(&self.summing_buffer, output_buffer, channel_layout);
                 processor_node.process(&mut context);
             } else if num_incoming_edges == 1 {
-                let input_node = self
-                    .graph
-                    .neighbors_directed(node_index, Direction::Incoming)
-                    .next()
-                    .unwrap();
+                let (input_node, channel_layout, has_rewire, edge_id) = {
+                    let edge = self
+                        .graph
+                        .edges_directed(node_index, Direction::Incoming)
+                        .next()
+                        .unwrap();
+                    (
+                        edge.source(),
+                        edge.weight().get_layout(),
+                        edge.weight().has_rewire,
+                        edge.id(),
+                    )
+                };
 
                 let (input_buffer, output_buffer): (&dyn AudioBuffer<T>, &mut dyn AudioBuffer<T>) =
                     if input_node == self.input_node {
@@ -275,17 +336,21 @@ impl<T: Sample> DspGraph<T> {
                         (&low[*input_buffer_index], &mut high[0])
                     };
 
-                let edge = self
-                    .graph
-                    .edges_directed(node_index, Direction::Incoming)
-                    .next()
-                    .unwrap();
-                let channel_layout = edge.weight().get_layout();
-
                 let processor_node = self.graph.node_weight_mut(node_index).unwrap();
-                let mut context =
-                    ProcessingContext::new(input_buffer, output_buffer, channel_layout);
-                processor_node.process(&mut context);
+
+                if has_rewire {
+                    let rewired_buffer_view = RewiredBufferView {
+                        buffer: input_buffer,
+                        rewire: self.edge_rewires.get(&edge_id).unwrap(),
+                    };
+                    let mut context =
+                        ProcessingContext::new(&rewired_buffer_view, output_buffer, channel_layout);
+                    processor_node.process(&mut context);
+                } else {
+                    let mut context =
+                        ProcessingContext::new(input_buffer, output_buffer, channel_layout);
+                    processor_node.process(&mut context);
+                }
             }
         }
 

@@ -6,9 +6,9 @@
 - [ ] allow more complex wiring
 - [ ] Write comparison to DASP graph
 - [x] Write example using CPAL and custom processor nodes
-- [ ] Write example that makes use of different channel layouts per edge
+- [x] Write example that makes use of different channel layouts per edge
 - [ ] deal with channel layout connections and buffer max channel mismatch
-- [ ] Processing context with less than iniitialized frames?
+- [ ] Processing context with less than initialized frames?
 - [ ] Review realtime safety
 - [ ] Add license
 - [ ] cleanup commit history if necessary
@@ -16,5 +16,5 @@
 - [ ] design and implement different scenarios including edge cases
 - [ ] benchmark and compare with DASP audio graph
 - [ ] unit tests
-- [ ] Documentation
+- [ ] Documentation (incl. realtime safety)
 - [ ] publish on github and crates.io

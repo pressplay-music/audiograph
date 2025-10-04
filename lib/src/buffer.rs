@@ -1,4 +1,5 @@
 use crate::{channel::ChannelLayout, sample::Sample};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrameSize(pub usize);
@@ -23,16 +24,13 @@ pub trait AudioBuffer<T: Sample> {
     }
 
     fn add(&mut self, other: &dyn AudioBuffer<T>, mut channel_layout: ChannelLayout) {
-        let max_num_channels = self.num_channels().min(other.num_channels());
-        channel_layout.clamp(max_num_channels);
+        channel_layout.clamp(self.num_channels());
         for channel in channel_layout.iter() {
-            self.channel_mut(channel)
-                .unwrap()
-                .iter_mut()
-                .zip(other.channel(channel).unwrap().iter())
-                .for_each(|(a, b)| {
+            if let (Some(src), Some(dst)) = (other.channel(channel), self.channel_mut(channel)) {
+                dst.iter_mut().zip(src.iter()).for_each(|(a, b)| {
                     *a += *b;
                 });
+            }
         }
     }
 }
@@ -171,12 +169,12 @@ impl<T: Sample> AudioBuffer<T> for MultiChannelBufferViewMut<'_, T> {
 // Immutable AudioBuffer view that remaps channel indices
 pub struct RewiredBufferView<'a, T: Sample> {
     pub buffer: &'a dyn AudioBuffer<T>,
-    pub rewire: &'a [usize],
+    pub rewire: &'a HashMap<usize, usize>,
 }
 
 impl<T: Sample> AudioBuffer<T> for RewiredBufferView<'_, T> {
     fn num_channels(&self) -> usize {
-        self.rewire.len()
+        self.rewire.keys().max().map_or(0, |&max| max + 1)
     }
 
     fn num_frames(&self) -> FrameSize {
@@ -184,8 +182,7 @@ impl<T: Sample> AudioBuffer<T> for RewiredBufferView<'_, T> {
     }
 
     fn channel(&self, index: usize) -> Option<&[T]> {
-        if index < self.rewire.len() {
-            let source_channel = self.rewire[index];
+        if let Some(&source_channel) = self.rewire.get(&index) {
             self.buffer.channel(source_channel)
         } else {
             None
