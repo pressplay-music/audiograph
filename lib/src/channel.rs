@@ -56,6 +56,10 @@ impl<const NUM_CHANNELS: usize, const WORDS: usize> ChannelLayoutImpl<NUM_CHANNE
     pub fn clamp(&mut self, max_channels: usize) {
         self.bits.split_at_mut(max_channels).1.fill(false);
     }
+
+    pub fn index_of_last_connected(&self) -> Option<usize> {
+        self.bits.last_one()
+    }
 }
 
 #[cfg(test)]

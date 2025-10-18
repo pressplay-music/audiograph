@@ -136,38 +136,57 @@ impl<T: Sample> DspGraph<T> {
         to: GraphNode,
         channel_layout: Option<ChannelLayout>,
     ) -> Result<EdgeIndex, AudioGraphError> {
-        let channel_layout = channel_layout.unwrap_or_default();
-        let edge_index = match (from, to) {
-            (GraphNode::Input, GraphNode::Node(node_idx)) => {
-                let edge = ProcessorChannel::new(channel_layout);
-                let edge_index = self.graph.add_edge(self.input_node, node_idx, edge);
-                Ok(edge_index)
-            }
-            (GraphNode::Node(node_idx), GraphNode::Output) => {
-                let edge = ProcessorChannel::new(channel_layout);
-                let edge_index = self.graph.add_edge(node_idx, self.output_node, edge);
-                Ok(edge_index)
-            }
-            (GraphNode::Node(from_idx), GraphNode::Node(to_idx)) => {
-                let edge = ProcessorChannel::new(channel_layout);
-                let edge_index = self.graph.add_edge(from_idx, to_idx, edge);
-                Ok(edge_index)
-            }
-            (GraphNode::Input, GraphNode::Output) => {
-                let edge = ProcessorChannel::new(channel_layout);
-                let edge_index = self.graph.add_edge(self.input_node, self.output_node, edge);
-                let input_node = self.graph.node_weight_mut(self.input_node).unwrap();
-                *input_node = ProcessorNode::new(PassThrough);
-                Ok(edge_index)
-            }
-            // Invalid combinations
-            (GraphNode::Input, GraphNode::Input)
-            | (GraphNode::Node(_), GraphNode::Input)
-            | (GraphNode::Output, _) => Err("Invalid connection"),
+        // invalid combinations
+        if let (GraphNode::Input, GraphNode::Input)
+        | (GraphNode::Node(_), GraphNode::Input)
+        | (GraphNode::Output, _) = (from, to)
+        {
+            return Err("Invalid connection");
+        }
+
+        let from_index = match from {
+            GraphNode::Input => self.input_node,
+            GraphNode::Output => self.output_node,
+            GraphNode::Node(idx) => idx,
+        };
+        let to_index = match to {
+            GraphNode::Input => self.input_node,
+            GraphNode::Output => self.output_node,
+            GraphNode::Node(idx) => idx,
         };
 
+        if self.graph.node_weight(from_index).is_none() {
+            return Err("Source node does not exist");
+        }
+        if self.graph.node_weight(to_index).is_none() {
+            return Err("Destination node does not exist");
+        }
+
+        let mut channel_layout = channel_layout.unwrap_or_default();
+
+        if from_index != self.input_node {
+            let source_buffer_channels = self
+                .buffers
+                .get(*self.buffer_map.get(&from_index).unwrap())
+                .unwrap()
+                .num_channels();
+            channel_layout.clamp(source_buffer_channels);
+        }
+
+        if to_index != self.output_node {
+            let destination_buffer_channels = self
+                .buffers
+                .get(*self.buffer_map.get(&to_index).unwrap())
+                .unwrap()
+                .num_channels();
+            channel_layout.clamp(destination_buffer_channels);
+        }
+
+        let edge = ProcessorChannel::new(channel_layout);
+        let edge_index = self.graph.add_edge(from_index, to_index, edge);
+
         self.topo_dirty = true;
-        edge_index
+        Ok(edge_index)
     }
 
     pub fn rewire(
@@ -308,8 +327,12 @@ impl<T: Sample> DspGraph<T> {
                     &mut self.buffers[*output_buffer_index];
                 let processor_node = self.graph.node_weight_mut(node_index).unwrap();
 
-                let mut context =
-                    ProcessingContext::new(&self.summing_buffer, output_buffer, channel_layout);
+                let mut context = ProcessingContext::create_unchecked(
+                    &self.summing_buffer,
+                    output_buffer,
+                    channel_layout,
+                );
+
                 processor_node.process(&mut context);
             } else if num_incoming_edges == 1 {
                 let (input_node, channel_layout, has_rewire, edge_id) = {
@@ -343,12 +366,18 @@ impl<T: Sample> DspGraph<T> {
                         buffer: input_buffer,
                         rewire: self.edge_rewires.get(&edge_id).unwrap(),
                     };
-                    let mut context =
-                        ProcessingContext::new(&rewired_buffer_view, output_buffer, channel_layout);
+                    let mut context = ProcessingContext::create_unchecked(
+                        &rewired_buffer_view,
+                        output_buffer,
+                        channel_layout,
+                    );
                     processor_node.process(&mut context);
                 } else {
-                    let mut context =
-                        ProcessingContext::new(input_buffer, output_buffer, channel_layout);
+                    let mut context = ProcessingContext::create_unchecked(
+                        input_buffer,
+                        output_buffer,
+                        channel_layout,
+                    );
                     processor_node.process(&mut context);
                 }
             }

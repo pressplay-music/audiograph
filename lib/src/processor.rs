@@ -4,6 +4,7 @@ pub trait Processor<T: Sample> {
     fn process(&mut self, context: &mut ProcessingContext<T>);
 }
 
+#[non_exhaustive]
 pub struct ProcessingContext<'a, T: Sample> {
     pub input_buffer: &'a dyn AudioBuffer<T>,
     pub output_buffer: &'a mut dyn AudioBuffer<T>,
@@ -11,7 +12,19 @@ pub struct ProcessingContext<'a, T: Sample> {
 }
 
 impl<'a, T: Sample> ProcessingContext<'a, T> {
-    pub fn new(
+    pub fn create_unchecked(
+        input_buffer: &'a dyn AudioBuffer<T>,
+        output_buffer: &'a mut dyn AudioBuffer<T>,
+        channel_layout: ChannelLayout,
+    ) -> Self {
+        Self {
+            input_buffer,
+            output_buffer,
+            channel_layout,
+        }
+    }
+
+    pub fn create_checked(
         input_buffer: &'a dyn AudioBuffer<T>,
         output_buffer: &'a mut dyn AudioBuffer<T>,
         mut channel_layout: ChannelLayout,
