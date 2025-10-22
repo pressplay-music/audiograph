@@ -1,4 +1,8 @@
-use crate::{buffer::AudioBuffer, channel::ChannelLayout, sample::Sample};
+use crate::{
+    buffer::{AudioBuffer, FrameSize},
+    channel::ChannelLayout,
+    sample::Sample,
+};
 
 pub trait Processor<T: Sample> {
     fn process(&mut self, context: &mut ProcessingContext<T>);
@@ -9,6 +13,7 @@ pub struct ProcessingContext<'a, T: Sample> {
     pub input_buffer: &'a dyn AudioBuffer<T>,
     pub output_buffer: &'a mut dyn AudioBuffer<T>,
     pub channel_layout: ChannelLayout,
+    pub num_frames: FrameSize,
 }
 
 impl<'a, T: Sample> ProcessingContext<'a, T> {
@@ -16,11 +21,13 @@ impl<'a, T: Sample> ProcessingContext<'a, T> {
         input_buffer: &'a dyn AudioBuffer<T>,
         output_buffer: &'a mut dyn AudioBuffer<T>,
         channel_layout: ChannelLayout,
+        num_frames: FrameSize,
     ) -> Self {
         Self {
             input_buffer,
             output_buffer,
             channel_layout,
+            num_frames,
         }
     }
 
@@ -28,15 +35,24 @@ impl<'a, T: Sample> ProcessingContext<'a, T> {
         input_buffer: &'a dyn AudioBuffer<T>,
         output_buffer: &'a mut dyn AudioBuffer<T>,
         mut channel_layout: ChannelLayout,
+        num_frames: FrameSize,
     ) -> Self {
         let max_channels = input_buffer
             .num_channels()
             .min(output_buffer.num_channels());
         channel_layout.clamp(max_channels);
+
+        let max_frames = input_buffer
+            .num_frames()
+            .0
+            .min(output_buffer.num_frames().0);
+        let num_frames = FrameSize(num_frames.0.min(max_frames));
+
         Self {
             input_buffer,
             output_buffer,
             channel_layout,
+            num_frames,
         }
     }
 }

@@ -85,7 +85,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut output_buffer = MultiChannelBuffer::<f32>::new(2, frame_size);
 
     for _ in 0..8 {
-        dsp_graph.process(&input_buffer, &mut output_buffer);
+        dsp_graph.process(&input_buffer, &mut output_buffer, frame_size);
         println!("L: {:?}", output_buffer.channel(0).unwrap());
         println!("R: {:?}", output_buffer.channel(1).unwrap());
     }

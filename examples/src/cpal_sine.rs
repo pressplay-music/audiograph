@@ -98,7 +98,7 @@ fn main() {
                     return;
                 }
 
-                dsp_graph.process(&input_buffer, &mut output_buffer);
+                dsp_graph.process(&input_buffer, &mut output_buffer, frame_size);
 
                 output_buffer.copy_to_interleaved(data);
             },

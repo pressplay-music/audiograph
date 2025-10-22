@@ -5,7 +5,7 @@ pub mod sample;
 
 use crate::buffer::{AudioBuffer, FrameSize, MultiChannelBuffer, RewiredBufferView};
 use crate::channel::ChannelLayout;
-use crate::processor::{NoOp, PassThrough, ProcessingContext, Processor};
+use crate::processor::{NoOp, ProcessingContext, Processor};
 use crate::sample::Sample;
 
 use petgraph::graph::{EdgeIndex, NodeIndex};
@@ -268,7 +268,12 @@ impl<T: Sample> DspGraph<T> {
         }
     }
 
-    pub fn process(&mut self, input: &dyn AudioBuffer<T>, output: &mut dyn AudioBuffer<T>) {
+    pub fn process(
+        &mut self,
+        input: &dyn AudioBuffer<T>,
+        output: &mut dyn AudioBuffer<T>,
+        num_frames: FrameSize,
+    ) {
         self.ensure_topo_order_updated(); // update node order if necessary
 
         output.clear();
@@ -317,7 +322,7 @@ impl<T: Sample> DspGraph<T> {
                     }
 
                     // Combine layouts
-                    // TODO: helper functions that operates on the bitset dierctly
+                    // TODO: helper functions that operates on the bitset directly
                     for channel in edge_layout.iter() {
                         channel_layout.connect(channel);
                     }
@@ -331,6 +336,7 @@ impl<T: Sample> DspGraph<T> {
                     &self.summing_buffer,
                     output_buffer,
                     channel_layout,
+                    num_frames,
                 );
 
                 processor_node.process(&mut context);
@@ -370,6 +376,7 @@ impl<T: Sample> DspGraph<T> {
                         &rewired_buffer_view,
                         output_buffer,
                         channel_layout,
+                        num_frames,
                     );
                     processor_node.process(&mut context);
                 } else {
@@ -377,6 +384,7 @@ impl<T: Sample> DspGraph<T> {
                         input_buffer,
                         output_buffer,
                         channel_layout,
+                        num_frames,
                     );
                     processor_node.process(&mut context);
                 }
@@ -402,6 +410,8 @@ impl<T: Sample> DspGraph<T> {
 
 #[cfg(test)]
 mod tests {
+    use crate::processor::PassThrough;
+
     use super::*;
 
     struct FourtyTwo {}
@@ -433,7 +443,7 @@ mod tests {
 
         let input = MultiChannelBuffer::new(1, FrameSize(10));
         let mut output = MultiChannelBuffer::new(1, FrameSize(10));
-        graph.process(&input, &mut output);
+        graph.process(&input, &mut output, FrameSize(10));
 
         output.channel(0).unwrap().iter().for_each(|&x| {
             assert_eq!(x, 42.0);
@@ -450,7 +460,7 @@ mod tests {
         input.channel_mut(0).unwrap().fill(2.0);
 
         let mut output = MultiChannelBuffer::new(1, FrameSize(10));
-        graph.process(&input, &mut output);
+        graph.process(&input, &mut output, FrameSize(10));
 
         output.channel(0).unwrap().iter().for_each(|&x| {
             assert_eq!(x, 2.0);
@@ -477,7 +487,7 @@ mod tests {
         input.channel_mut(0).unwrap().fill(2.0);
         let mut output = MultiChannelBuffer::new(1, FrameSize(10));
 
-        graph.process(&input, &mut output);
+        graph.process(&input, &mut output, FrameSize(10));
 
         output.channel(0).unwrap().iter().for_each(|&x| {
             assert_eq!(x, 44.0);
@@ -521,7 +531,7 @@ mod tests {
         input.channel_mut(2).unwrap().fill(3.0);
 
         let mut output = MultiChannelBuffer::new(3, FrameSize(10));
-        graph.process(&input, &mut output);
+        graph.process(&input, &mut output, FrameSize(10));
 
         // Only channel 1 should have the FourtyTwo output (42.0)
         output.channel(0).unwrap().iter().for_each(|&x| {
@@ -584,7 +594,7 @@ mod tests {
         let input = MultiChannelBuffer::new(1, FrameSize(8));
         let mut output = MultiChannelBuffer::new(1, FrameSize(8));
 
-        graph.process(&input, &mut output);
+        graph.process(&input, &mut output, FrameSize(8));
 
         output.channel(0).unwrap().iter().for_each(|&x| {
             assert_eq!(x, 10.0);
