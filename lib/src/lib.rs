@@ -114,6 +114,10 @@ impl<T: Sample> DspGraph<T> {
         processor: P,
         output_buffer: MultiChannelBuffer<T>,
     ) -> Result<NodeIndex, AudioGraphError> {
+        if self.graph.node_count() >= self.graph.capacity().0 {
+            return Err("Graph node capacity exceeded");
+        }
+
         let buffer_index = self.buffers.len();
 
         if buffer_index >= self.buffers.capacity() {
@@ -136,6 +140,10 @@ impl<T: Sample> DspGraph<T> {
         to: GraphNode,
         channel_layout: Option<ChannelLayout>,
     ) -> Result<EdgeIndex, AudioGraphError> {
+        if self.graph.edge_count() >= self.graph.capacity().1 {
+            return Err("Graph edge capacity exceeded");
+        }
+
         // invalid combinations
         if let (GraphNode::Input, GraphNode::Input)
         | (GraphNode::Node(_), GraphNode::Input)
