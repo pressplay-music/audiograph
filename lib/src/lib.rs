@@ -191,7 +191,14 @@ impl<T: Sample> DspGraph<T> {
         }
 
         let edge = ProcessorChannel::new(channel_layout);
-        let edge_index = self.graph.add_edge(from_index, to_index, edge);
+
+        let edge_index = match self.graph.find_edge(from_index, to_index) {
+            Some(existing_edge_index) => {
+                *self.graph.edge_weight_mut(existing_edge_index).unwrap() = edge;
+                existing_edge_index
+            }
+            None => self.graph.add_edge(from_index, to_index, edge),
+        };
 
         self.topo_dirty = true;
         Ok(edge_index)
