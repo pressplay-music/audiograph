@@ -9,7 +9,7 @@
 - [x] Write example that makes use of different channel layouts per edge
 - [x] deal with channel layout connections and buffer max channel mismatch
 - [x] Processing context with less than initialized frames?
-- [ ] Review realtime safety
+- [x] Review realtime safety
 - [ ] Add license
 - [ ] cleanup commit history if necessary
 - [ ] Clean API, error handling

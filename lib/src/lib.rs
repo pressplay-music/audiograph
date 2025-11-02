@@ -47,9 +47,11 @@ impl<T: Sample> ProcessorNode<T> {
     }
 }
 
+#[derive(Clone)]
 struct ProcessorChannel {
     pub channel_layout: ChannelLayout,
     pub has_rewire: bool,
+    pub enabled: bool,
 }
 
 impl ProcessorChannel {
@@ -57,6 +59,7 @@ impl ProcessorChannel {
         Self {
             channel_layout,
             has_rewire: false,
+            enabled: true,
         }
     }
 
@@ -204,6 +207,7 @@ impl<T: Sample> DspGraph<T> {
         Ok(edge_index)
     }
 
+    /// NOT realtime-safe
     pub fn rewire(
         &mut self,
         edge_index: EdgeIndex,
@@ -234,6 +238,7 @@ impl<T: Sample> DspGraph<T> {
         }
     }
 
+    /// NOT realtime-safe
     pub fn remove_rewire(&mut self, edge_index: EdgeIndex) -> Result<(), AudioGraphError> {
         if let Some(edge) = self.graph.edge_weight_mut(edge_index) {
             edge.has_rewire = false;
@@ -244,6 +249,7 @@ impl<T: Sample> DspGraph<T> {
         }
     }
 
+    /// NOT realtime-safe
     pub fn connect_rewired(
         &mut self,
         from: GraphNode,
@@ -256,11 +262,29 @@ impl<T: Sample> DspGraph<T> {
         Ok(edge)
     }
 
-    pub fn disconnect(&mut self, edge: EdgeIndex) -> Result<(), AudioGraphError> {
+    pub fn remove_connection(&mut self, edge: EdgeIndex) -> Result<(), AudioGraphError> {
+        // Note: Rewire information (if any) is deliberately leaked for RT-safety
         self.graph.remove_edge(edge).ok_or("Edge not found")?;
-        self.edge_rewires.remove(&edge); // Clean up rewiring data
         self.topo_dirty = true;
         Ok(())
+    }
+
+    pub fn enable_connection(&mut self, edge: EdgeIndex) -> Result<(), AudioGraphError> {
+        if let Some(edge_weight) = self.graph.edge_weight_mut(edge) {
+            edge_weight.enabled = true;
+            Ok(())
+        } else {
+            Err("Edge not found")
+        }
+    }
+
+    pub fn disable_connection(&mut self, edge: EdgeIndex) -> Result<(), AudioGraphError> {
+        if let Some(edge_weight) = self.graph.edge_weight_mut(edge) {
+            edge_weight.enabled = false;
+            Ok(())
+        } else {
+            Err("Edge not found")
+        }
     }
 
     fn ensure_topo_order_updated(&mut self) {
@@ -300,17 +324,19 @@ impl<T: Sample> DspGraph<T> {
 
             let output_buffer_index = self.buffer_map.get(&node_index).unwrap();
 
-            let num_incoming_edges = self
+            let mut incoming_edges = self
                 .graph
                 .edges_directed(node_index, Direction::Incoming)
-                .count();
+                .filter(|edge| edge.weight().enabled);
+
+            let num_incoming_edges = incoming_edges.clone().count();
 
             // If there are multiple inputs, sum them
             if num_incoming_edges > 1 {
                 self.summing_buffer.clear();
                 let mut channel_layout = ChannelLayout::new(0);
 
-                for edge in self.graph.edges_directed(node_index, Direction::Incoming) {
+                for edge in incoming_edges {
                     let input_node = edge.source();
                     let input_buffer: &dyn AudioBuffer<T> = if input_node == self.input_node {
                         input
@@ -357,11 +383,7 @@ impl<T: Sample> DspGraph<T> {
                 processor_node.process(&mut context);
             } else if num_incoming_edges == 1 {
                 let (input_node, channel_layout, has_rewire, edge_id) = {
-                    let edge = self
-                        .graph
-                        .edges_directed(node_index, Direction::Incoming)
-                        .next()
-                        .unwrap();
+                    let edge = incoming_edges.next().unwrap();
                     (
                         edge.source(),
                         edge.weight().get_layout(),
@@ -409,6 +431,7 @@ impl<T: Sample> DspGraph<T> {
         for edge in self
             .graph
             .edges_directed(self.output_node, Direction::Incoming)
+            .filter(|e| e.weight().enabled)
         {
             let node = edge.source();
             let node_buffer: &dyn AudioBuffer<T> = if node == self.input_node {
@@ -717,5 +740,39 @@ mod tests {
 
         let result = graph.connect(n1.into(), GraphNode::Output, None);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_enable_disable_connection() {
+        let frame_size = FrameSize(10);
+        let mut graph = DspGraph::<f32>::new(1, frame_size, None);
+
+        let node = graph
+            .add_processor(FourtyTwo {}, MultiChannelBuffer::new(1, frame_size))
+            .unwrap();
+
+        graph.connect(GraphNode::Input, node.into(), None).unwrap();
+
+        let output_edge = graph.connect(node.into(), GraphNode::Output, None).unwrap();
+
+        let mut input = MultiChannelBuffer::new(1, frame_size);
+        input.channel_mut(0).unwrap().fill(1.0);
+
+        let mut output = MultiChannelBuffer::new(1, frame_size);
+
+        graph.process(&input, &mut output, frame_size);
+        assert_eq!(output.channel(0).unwrap()[0], 42.0);
+
+        graph.disable_connection(output_edge).unwrap();
+
+        output.clear();
+        graph.process(&input, &mut output, frame_size);
+        assert_eq!(output.channel(0).unwrap()[0], 0.0);
+
+        graph.enable_connection(output_edge).unwrap();
+
+        output.clear();
+        graph.process(&input, &mut output, frame_size);
+        assert_eq!(output.channel(0).unwrap()[0], 42.0);
     }
 }
