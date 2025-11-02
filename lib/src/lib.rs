@@ -615,4 +615,107 @@ mod tests {
             assert_eq!(x, 10.0);
         });
     }
+
+    #[test]
+    fn test_reconnect() {
+        let frame_size = FrameSize(10);
+
+        let mut graph = DspGraph::<f32>::new(2, frame_size, Some(16));
+
+        let node_a = graph
+            .add_processor(PassThrough {}, MultiChannelBuffer::new(2, frame_size))
+            .unwrap();
+
+        // Initial connection
+        let input_edge = graph
+            .connect(GraphNode::Input, node_a.into(), Some(ChannelLayout::new(2)))
+            .unwrap();
+
+        let output_edge = graph
+            .connect(
+                node_a.into(),
+                GraphNode::Output,
+                Some(ChannelLayout::new(2)),
+            )
+            .unwrap();
+
+        let mut input = MultiChannelBuffer::new(2, frame_size);
+        input.channel_mut(0).unwrap().fill(1.0);
+        input.channel_mut(1).unwrap().fill(2.0);
+
+        let mut output = MultiChannelBuffer::new(2, frame_size);
+
+        graph.process(&input, &mut output, frame_size);
+        assert_eq!(output.channel(0).unwrap()[0], 1.0);
+        assert_eq!(output.channel(1).unwrap()[0], 2.0);
+
+        // reconnect with different layout
+        let new_input_edge = graph
+            .connect(
+                GraphNode::Input,
+                node_a.into(),
+                Some(ChannelLayout::from_indices(&[0])), // Only channel 0
+            )
+            .unwrap();
+        let new_output_edge = graph
+            .connect(
+                node_a.into(),
+                GraphNode::Output,
+                Some(ChannelLayout::from_indices(&[0])), // Only channel 0
+            )
+            .unwrap();
+
+        assert_eq!(input_edge, new_input_edge);
+        assert_eq!(output_edge, new_output_edge);
+
+        output.clear();
+        graph.process(&input, &mut output, frame_size);
+        assert_eq!(output.channel(0).unwrap()[0], 1.0);
+        assert_eq!(output.channel(1).unwrap()[0], 0.0); // Channel 1 disconnected
+
+        graph
+            .connect(
+                GraphNode::Input,
+                node_a.into(),
+                Some(ChannelLayout::from_indices(&[1])), // Only channel 1
+            )
+            .unwrap();
+        graph
+            .connect(
+                node_a.into(),
+                GraphNode::Output,
+                Some(ChannelLayout::from_indices(&[1])), // Only channel 1
+            )
+            .unwrap();
+
+        output.clear();
+        graph.process(&input, &mut output, frame_size);
+        assert_eq!(output.channel(0).unwrap()[0], 0.0); // Channel 0 disconnected
+        assert_eq!(output.channel(1).unwrap()[0], 2.0);
+    }
+
+    #[test]
+    fn test_capacity_limits() {
+        let mut graph = DspGraph::<f32>::new(1, FrameSize(10), Some(4));
+
+        // Capacity is 4, input and output are already created (2 nodes), so we can add 2 more
+        let n1 = graph
+            .add_processor(PassThrough {}, MultiChannelBuffer::new(1, FrameSize(10)))
+            .unwrap();
+        let n2 = graph
+            .add_processor(PassThrough {}, MultiChannelBuffer::new(1, FrameSize(10)))
+            .unwrap();
+
+        assert!(graph
+            .add_processor(PassThrough {}, MultiChannelBuffer::new(1, FrameSize(10)))
+            .is_err());
+
+        graph.connect(GraphNode::Input, n1.into(), None).unwrap();
+        graph.connect(n1.into(), n2.into(), None).unwrap();
+        graph.connect(n2.into(), GraphNode::Output, None).unwrap();
+        graph.connect(GraphNode::Input, n2.into(), None).unwrap();
+
+        let result = graph.connect(n1.into(), GraphNode::Output, None);
+        assert!(result.is_err());
+    }
 }
