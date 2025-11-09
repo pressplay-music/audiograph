@@ -3,10 +3,10 @@ pub mod channel;
 pub mod processor;
 pub mod sample;
 
-use crate::buffer::{AudioBuffer, FrameSize, MultiChannelBuffer, RewiredBufferView};
-use crate::channel::ChannelLayout;
-use crate::processor::{NoOp, ProcessingContext, Processor};
-use crate::sample::Sample;
+pub use crate::buffer::{AudioBuffer, FrameSize, MultiChannelBuffer, RewiredBufferView};
+pub use crate::channel::ChannelLayout;
+pub use crate::processor::{NoOp, ProcessingContext, Processor};
+pub use crate::sample::Sample;
 
 use petgraph::graph::{EdgeIndex, NodeIndex};
 use petgraph::stable_graph::StableDiGraph;

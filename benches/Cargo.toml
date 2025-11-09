@@ -1,0 +1,3 @@
+[workspace]
+members = ["audiograph_bench", "dasp_graph_bench"]
+resolver = "2"
