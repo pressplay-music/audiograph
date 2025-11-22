@@ -60,6 +60,10 @@ impl<const NUM_CHANNELS: usize, const WORDS: usize> ChannelLayoutImpl<NUM_CHANNE
     pub fn index_of_last_connected(&self) -> Option<usize> {
         self.bits.last_one()
     }
+
+    pub fn combine(&mut self, other: Self) {
+        self.bits |= other.bits;
+    }
 }
 
 #[cfg(test)]

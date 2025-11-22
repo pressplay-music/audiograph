@@ -353,20 +353,15 @@ impl<T: Sample> DspGraph<T> {
                                 buffer: input_buffer,
                                 rewire,
                             };
-                            self.summing_buffer
-                                .add(&rewired_buffer_view, edge_layout.clone());
+                            self.summing_buffer.add(&rewired_buffer_view, &edge_layout);
                         } else {
-                            self.summing_buffer.add(input_buffer, edge_layout.clone());
+                            self.summing_buffer.add(input_buffer, &edge_layout);
                         }
                     } else {
-                        self.summing_buffer.add(input_buffer, edge_layout.clone());
+                        self.summing_buffer.add(input_buffer, &edge_layout);
                     }
 
-                    // Combine layouts
-                    // TODO: helper functions that operates on the bitset directly
-                    for channel in edge_layout.iter() {
-                        channel_layout.connect(channel);
-                    }
+                    channel_layout.combine(edge_layout);
                 }
 
                 let output_buffer: &mut dyn AudioBuffer<T> =
@@ -441,7 +436,7 @@ impl<T: Sample> DspGraph<T> {
                 &self.buffers[*input_buffer_index]
             };
             // TODO: handle disconnected channels
-            output.add(node_buffer, edge.weight().get_layout());
+            output.add(node_buffer, &edge.weight().get_layout());
         }
     }
 }
