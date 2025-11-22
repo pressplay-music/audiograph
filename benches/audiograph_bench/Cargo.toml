@@ -3,9 +3,17 @@ name = "audiograph_bench"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "audiograph_bench"
+path = "src/lib.rs"
+
 [[bench]]
 name = "audiograph_benchmark"
 harness = false
+
+[[bin]]
+name = "profile"
+path = "src/profile.rs"
 
 [dependencies]
 criterion = "0.7.0"
