@@ -18,6 +18,7 @@ impl BenchProcessor {
 enum GraphNode {
     Source,
     Processor(BenchProcessor),
+    EmptyProcessor, // For measuring graph overhead
     Output,
 }
 
@@ -33,6 +34,22 @@ impl Node for GraphNode {
             }
             GraphNode::Processor(processor) => {
                 processor.process(inputs, outputs);
+            }
+            GraphNode::EmptyProcessor => {
+                // Empty processor - only does summing (DASP's node responsibility)
+                for output in outputs.iter_mut() {
+                    for sample in output.iter_mut() {
+                        *sample = 0.0;
+                    }
+                }
+                
+                for input in inputs.iter() {
+                    for (output_buffer, input_buffer) in outputs.iter_mut().zip(input.buffers().iter()) {
+                        for (out_sample, in_sample) in output_buffer.iter_mut().zip(input_buffer.iter()) {
+                            *out_sample += in_sample; // Only summing, no increment
+                        }
+                    }
+                }
             }
             GraphNode::Output => {
                 for output in outputs.iter_mut() {
@@ -88,6 +105,7 @@ type DaspProcessor = dasp_graph::Processor<DaspGraph>;
 
 fn create_dasp_diamond_graph(
     layers: usize,
+    use_empty: bool,
 ) -> (DaspGraph, DaspProcessor, petgraph::graph::NodeIndex, usize) {
     assert!(layers % 2 == 1, "Layers must be odd");
     assert!(layers >= 3, "Need at least 3 layers");
@@ -95,6 +113,7 @@ fn create_dasp_diamond_graph(
     let middle_layer = layers / 2;
     let increment = 0.1;
 
+    // Use identical edge counting logic as audiograph
     let mut total_edges = 0;
     let mut layer_sizes = Vec::new();
     for layer in 0..layers {
@@ -113,8 +132,7 @@ fn create_dasp_diamond_graph(
     }
 
     let total_nodes: usize = layer_sizes.iter().sum::<usize>() + 2; // +1 for source, +1 for output
-    total_edges += layer_sizes[0]; // source connects to first layer
-    total_edges += layer_sizes[layers - 1]; // last layer connects to output
+    // Note: Don't add extra edges to total_edges - use audiograph's counting method
 
     let mut graph = DaspGraph::with_capacity(total_nodes, total_edges);
     let processor = DaspProcessor::with_capacity(total_nodes);
@@ -132,7 +150,12 @@ fn create_dasp_diamond_graph(
 
         let mut layer_nodes = Vec::new();
         for _i in 0..nodes_in_layer {
-            let node_data = NodeData::new2(GraphNode::Processor(BenchProcessor::new(increment)));
+            let graph_node = if use_empty {
+                GraphNode::EmptyProcessor
+            } else {
+                GraphNode::Processor(BenchProcessor::new(increment))
+            };
+            let node_data = NodeData::new2(graph_node);
             let node_id = graph.add_node(node_data);
             layer_nodes.push(node_id);
         }
@@ -176,11 +199,25 @@ fn create_dasp_diamond_graph(
 }
 
 fn bench_dasp_performance(c: &mut Criterion) {
-    let mut group = c.benchmark_group("dasp_performance");
-
+    // Graph overhead only (EmptyProcessor)
+    let mut overhead_group = c.benchmark_group("dasp_overhead");
     for &layers in &[3, 5, 7, 9] {
         let (mut dasp_graph, mut dasp_processor, node_id, total_edges) =
-            create_dasp_diamond_graph(layers);
+            create_dasp_diamond_graph(layers, true);
+
+        overhead_group.bench_function(&format!("graph_{}", total_edges), |b| {
+            b.iter(|| {
+                dasp_processor.process(black_box(&mut dasp_graph), black_box(node_id));
+            })
+        });
+    }
+    overhead_group.finish();
+
+    // Full processing (BenchProcessor)
+    let mut full_group = c.benchmark_group("dasp_full");
+    for &layers in &[3, 5, 7, 9] {
+        let (mut dasp_graph, mut dasp_processor, node_id, total_edges) =
+            create_dasp_diamond_graph(layers, false); // use_empty = false
 
         // Check output value before benchmarking
         dasp_processor.process(&mut dasp_graph, node_id);
@@ -190,20 +227,18 @@ fn bench_dasp_performance(c: &mut Criterion) {
             .buffers
             .first()
             .unwrap();
-
         println!(
             "DASP {} layers -> output[0][0] = {}",
             layers, output_buffer[0]
         );
 
-        group.bench_function(&format!("graph_{}", total_edges), |b| {
+        full_group.bench_function(&format!("graph_{}", total_edges), |b| {
             b.iter(|| {
                 dasp_processor.process(black_box(&mut dasp_graph), black_box(node_id));
             })
         });
     }
-
-    group.finish();
+    full_group.finish();
 }
 
 criterion_group!(benches, bench_dasp_performance);

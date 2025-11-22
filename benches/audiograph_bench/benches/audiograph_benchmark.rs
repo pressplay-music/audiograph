@@ -15,6 +15,15 @@ impl BenchProcessor {
     }
 }
 
+// Empty processor for measuring pure graph overhead
+struct EmptyProcessor;
+
+impl EmptyProcessor {
+    fn new() -> Self {
+        Self
+    }
+}
+
 impl Processor<f32> for BenchProcessor {
     fn process(&mut self, context: &mut ProcessingContext<f32>) {
         for channel in context.channel_layout.iter() {
@@ -27,7 +36,12 @@ impl Processor<f32> for BenchProcessor {
     }
 }
 
-fn create_diamond_graph(layers: usize, buffer_size: usize) -> (audiograph::DspGraph<f32>, usize) {
+impl Processor<f32> for EmptyProcessor {
+    fn process(&mut self, context: &mut ProcessingContext<f32>) {
+    }
+}
+
+fn create_diamond_graph(layers: usize, buffer_size: usize, use_empty: bool) -> (audiograph::DspGraph<f32>, usize) {
     use audiograph::*;
 
     assert!(layers % 2 == 1, "Layers must be odd");
@@ -61,12 +75,21 @@ fn create_diamond_graph(layers: usize, buffer_size: usize) -> (audiograph::DspGr
 
         let mut layer_nodes = Vec::new();
         for _i in 0..nodes_in_layer {
-            let processor_node = graph
-                .add_processor(
-                    BenchProcessor::new(increment),
-                    MultiChannelBuffer::new(2, FrameSize(buffer_size)),
-                )
-                .unwrap();
+            let processor_node = if use_empty {
+                graph
+                    .add_processor(
+                        EmptyProcessor::new(),
+                        MultiChannelBuffer::new(2, FrameSize(buffer_size)),
+                    )
+                    .unwrap()
+            } else {
+                graph
+                    .add_processor(
+                        BenchProcessor::new(increment),
+                        MultiChannelBuffer::new(2, FrameSize(buffer_size)),
+                    )
+                    .unwrap()
+            };
             layer_nodes.push(processor_node);
         }
         all_layers.push(layer_nodes);
@@ -123,12 +146,32 @@ fn create_diamond_graph(layers: usize, buffer_size: usize) -> (audiograph::DspGr
 }
 
 fn bench_audiograph_performance(c: &mut Criterion) {
-    let mut group = c.benchmark_group("audiograph_performance");
-
-    // Test different diamond structures
+    // Graph overhead only (EmptyProcessor)
+    let mut overhead_group = c.benchmark_group("audiograph_overhead");
     for &layers in &[3, 5, 7, 9] {
         let buffer_size = 64;
-        let (mut graph, total_edges) = create_diamond_graph(layers, buffer_size);
+        let (mut graph, total_edges) = create_diamond_graph(layers, buffer_size, true); // use_empty = true
+        let input = MultiChannelBuffer::new(2, FrameSize(buffer_size));
+        let mut output = MultiChannelBuffer::new(2, FrameSize(buffer_size));
+
+        overhead_group.bench_function(&format!("graph_{}", total_edges), |b| {
+            b.iter(|| {
+                graph.process(
+                    black_box(&input),
+                    black_box(&mut output),
+                    black_box(FrameSize(buffer_size)),
+                );
+            })
+        });
+    }
+    overhead_group.finish();
+
+    // Full processing (BenchProcessor)
+    let mut full_group = c.benchmark_group("audiograph_full");
+    for &layers in &[3, 5, 7, 9] {
+        let buffer_size = 64;
+        let increment = 0.1;
+        let (mut graph, total_edges) = create_diamond_graph(layers, buffer_size, false); // use_empty = false
         let input = MultiChannelBuffer::new(2, FrameSize(buffer_size));
         let mut output = MultiChannelBuffer::new(2, FrameSize(buffer_size));
 
@@ -140,7 +183,7 @@ fn bench_audiograph_performance(c: &mut Criterion) {
             output.channel(0).unwrap()[0]
         );
 
-        group.bench_function(&format!("graph_{}", total_edges), |b| {
+        full_group.bench_function(&format!("graph_{}", total_edges), |b| {
             b.iter(|| {
                 graph.process(
                     black_box(&input),
@@ -150,8 +193,7 @@ fn bench_audiograph_performance(c: &mut Criterion) {
             })
         });
     }
-
-    group.finish();
+    full_group.finish();
 }
 
 criterion_group!(benches, bench_audiograph_performance);
