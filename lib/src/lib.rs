@@ -74,8 +74,7 @@ type GraphVisitMap<T> =
 pub struct DspGraph<T: Sample> {
     graph: StableDiGraph<ProcessorNode<T>, ProcessorChannel>,
     topo_order: Vec<NodeIndex>, // Pre-allocated processing order vector
-    buffers: Vec<MultiChannelBuffer<T>>,
-    buffer_map: HashMap<NodeIndex, usize>,
+    buffers: Vec<Option<MultiChannelBuffer<T>>>,
     input_node: NodeIndex,
     output_node: NodeIndex,
     summing_buffer: MultiChannelBuffer<T>,
@@ -87,11 +86,16 @@ pub struct DspGraph<T: Sample> {
 impl<T: Sample> DspGraph<T> {
     pub fn new(num_channels: usize, frame_size: FrameSize, max_num_edges: Option<usize>) -> Self {
         let max_num_edges = max_num_edges.unwrap_or(64);
+
+        let mut buffers = Vec::with_capacity(max_num_edges);
+        for _ in 0..max_num_edges {
+            buffers.push(None);
+        }
+
         let mut graph = DspGraph {
             graph: StableDiGraph::with_capacity(max_num_edges, max_num_edges),
             topo_order: Vec::with_capacity(max_num_edges),
-            buffers: Vec::with_capacity(max_num_edges),
-            buffer_map: HashMap::with_capacity(max_num_edges),
+            buffers,
             input_node: NodeIndex::end(),
             output_node: NodeIndex::end(),
             summing_buffer: MultiChannelBuffer::new(num_channels, frame_size),
@@ -121,16 +125,14 @@ impl<T: Sample> DspGraph<T> {
             return Err("Graph node capacity exceeded");
         }
 
-        let buffer_index = self.buffers.len();
+        let node_index = self.graph.add_node(ProcessorNode::new(processor));
+        let buffer_index = node_index.index();
 
-        if buffer_index >= self.buffers.capacity() {
+        if buffer_index >= self.buffers.len() {
             return Err("Buffer capacity exceeded");
         }
 
-        let node_index = self.graph.add_node(ProcessorNode::new(processor));
-
-        self.buffers.push(output_buffer);
-        self.buffer_map.insert(node_index, buffer_index);
+        self.buffers[buffer_index] = Some(output_buffer);
 
         self.topo_dirty = true; // TODO: only if connected?
 
@@ -176,18 +178,16 @@ impl<T: Sample> DspGraph<T> {
         let mut channel_layout = channel_layout.unwrap_or_default();
 
         if from_index != self.input_node {
-            let source_buffer_channels = self
-                .buffers
-                .get(*self.buffer_map.get(&from_index).unwrap())
+            let source_buffer_channels = self.buffers[from_index.index()]
+                .as_ref()
                 .unwrap()
                 .num_channels();
             channel_layout.clamp(source_buffer_channels);
         }
 
         if to_index != self.output_node {
-            let destination_buffer_channels = self
-                .buffers
-                .get(*self.buffer_map.get(&to_index).unwrap())
+            let destination_buffer_channels = self.buffers[to_index.index()]
+                .as_ref()
                 .unwrap()
                 .num_channels();
             channel_layout.clamp(destination_buffer_channels);
@@ -322,7 +322,7 @@ impl<T: Sample> DspGraph<T> {
                 continue;
             }
 
-            let output_buffer_index = self.buffer_map.get(&node_index).unwrap();
+            let output_buffer_index = node_index.index();
 
             let mut incoming_edges = self
                 .graph
@@ -341,8 +341,8 @@ impl<T: Sample> DspGraph<T> {
                     let input_buffer: &dyn AudioBuffer<T> = if input_node == self.input_node {
                         input
                     } else {
-                        let input_buffer_index = self.buffer_map.get(&input_node).unwrap();
-                        &self.buffers[*input_buffer_index]
+                        let input_buffer_index = input_node.index();
+                        self.buffers[input_buffer_index].as_ref().unwrap()
                     };
 
                     let edge_layout = edge.weight().get_layout();
@@ -365,7 +365,7 @@ impl<T: Sample> DspGraph<T> {
                 }
 
                 let output_buffer: &mut dyn AudioBuffer<T> =
-                    &mut self.buffers[*output_buffer_index];
+                    self.buffers[output_buffer_index].as_mut().unwrap();
                 let processor_node = self.graph.node_weight_mut(node_index).unwrap();
 
                 let mut context = ProcessingContext::create_unchecked(
@@ -389,12 +389,15 @@ impl<T: Sample> DspGraph<T> {
 
                 let (input_buffer, output_buffer): (&dyn AudioBuffer<T>, &mut dyn AudioBuffer<T>) =
                     if input_node == self.input_node {
-                        let output_buffer = &mut self.buffers[*output_buffer_index];
+                        let output_buffer = self.buffers[output_buffer_index].as_mut().unwrap();
                         (input, output_buffer)
                     } else {
-                        let input_buffer_index = self.buffer_map.get(&input_node).unwrap();
-                        let (low, high) = self.buffers.split_at_mut(*output_buffer_index);
-                        (&low[*input_buffer_index], &mut high[0])
+                        let input_buffer_index = input_node.index();
+                        let (low, high) = self.buffers.split_at_mut(output_buffer_index);
+                        (
+                            low[input_buffer_index].as_ref().unwrap(),
+                            high[0].as_mut().unwrap(),
+                        )
                     };
 
                 let processor_node = self.graph.node_weight_mut(node_index).unwrap();
@@ -432,8 +435,8 @@ impl<T: Sample> DspGraph<T> {
             let node_buffer: &dyn AudioBuffer<T> = if node == self.input_node {
                 input
             } else {
-                let input_buffer_index = self.buffer_map.get(&node).unwrap();
-                &self.buffers[*input_buffer_index]
+                let input_buffer_index = node.index();
+                self.buffers[input_buffer_index].as_ref().unwrap()
             };
             // TODO: handle disconnected channels
             output.add(node_buffer, &edge.weight().get_layout());
