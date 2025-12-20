@@ -1,4 +1,3 @@
-use audiograph::buffer::{AudioBuffer, FrameSize, MultiChannelBuffer};
 use audiograph::processor::{ProcessingContext, Processor};
 
 pub struct BenchProcessor {
@@ -22,18 +21,16 @@ impl EmptyProcessor {
 
 impl Processor<f32> for BenchProcessor {
     fn process(&mut self, context: &mut ProcessingContext<f32>) {
-        for channel in context.channel_layout.iter() {
-            let input_channel = context.input_buffer.channel(channel).unwrap();
-            let output_channel = context.output_buffer.channel_mut(channel).unwrap();
+        context.for_each_channel(|input_channel, output_channel| {
             for (out_sample, in_sample) in output_channel.iter_mut().zip(input_channel.iter()) {
                 *out_sample += in_sample + self.increment;
             }
-        }
+        });
     }
 }
 
 impl Processor<f32> for EmptyProcessor {
-    fn process(&mut self, context: &mut ProcessingContext<f32>) {}
+    fn process(&mut self, _context: &mut ProcessingContext<f32>) {}
 }
 
 pub fn create_diamond_graph(

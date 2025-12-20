@@ -23,9 +23,22 @@ pub trait AudioBuffer<T: Sample> {
         }
     }
 
-    fn add(&mut self, other: &dyn AudioBuffer<T>, channel_layout: &ChannelLayout) {
-        for channel in channel_layout.iter().take(self.num_channels()) {
-            if let (Some(src), Some(dst)) = (other.channel(channel), self.channel_mut(channel)) {
+    fn add(&mut self, other: &dyn AudioBuffer<T>, channel_layout: &Option<ChannelLayout>) {
+        if let Some(layout) = channel_layout {
+            // TODO: check if take() is used correctly here
+            for channel in layout.iter().take(self.num_channels()) {
+                if let (Some(src), Some(dst)) = (other.channel(channel), self.channel_mut(channel))
+                {
+                    dst.iter_mut().zip(src.iter()).for_each(|(a, b)| {
+                        *a += *b;
+                    });
+                }
+            }
+        } else {
+            let num_channels = self.num_channels().min(other.num_channels());
+            for channel in 0..num_channels {
+                let src = other.channel(channel).unwrap();
+                let dst = self.channel_mut(channel).unwrap();
                 dst.iter_mut().zip(src.iter()).for_each(|(a, b)| {
                     *a += *b;
                 });

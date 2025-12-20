@@ -61,7 +61,7 @@ impl<const NUM_CHANNELS: usize, const WORDS: usize> ChannelLayoutImpl<NUM_CHANNE
         self.bits.last_one()
     }
 
-    pub fn combine(&mut self, other: Self) {
+    pub fn combine(&mut self, other: &Self) {
         self.bits |= other.bits;
     }
 }

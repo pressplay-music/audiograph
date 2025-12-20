@@ -49,13 +49,13 @@ impl<T: Sample> ProcessorNode<T> {
 
 #[derive(Clone)]
 struct ProcessorChannel {
-    pub channel_layout: ChannelLayout,
+    pub channel_layout: Option<ChannelLayout>,
     pub has_rewire: bool,
     pub enabled: bool,
 }
 
 impl ProcessorChannel {
-    pub fn new(channel_layout: ChannelLayout) -> Self {
+    pub fn new(channel_layout: Option<ChannelLayout>) -> Self {
         Self {
             channel_layout,
             has_rewire: false,
@@ -63,7 +63,7 @@ impl ProcessorChannel {
         }
     }
 
-    pub fn get_layout(&self) -> ChannelLayout {
+    pub fn get_layout(&self) -> Option<ChannelLayout> {
         self.channel_layout.clone()
     }
 }
@@ -175,23 +175,29 @@ impl<T: Sample> DspGraph<T> {
             return Err("Destination node does not exist");
         }
 
-        let mut channel_layout = channel_layout.unwrap_or_default();
+        let channel_layout = match channel_layout {
+            None => None,
+            Some(layout) => {
+                let mut channel_layout = layout;
 
-        if from_index != self.input_node {
-            let source_buffer_channels = self.buffers[from_index.index()]
-                .as_ref()
-                .unwrap()
-                .num_channels();
-            channel_layout.clamp(source_buffer_channels);
-        }
+                if from_index != self.input_node {
+                    let source_buffer_channels = self.buffers[from_index.index()]
+                        .as_ref()
+                        .unwrap()
+                        .num_channels();
+                    channel_layout.clamp(source_buffer_channels);
+                }
 
-        if to_index != self.output_node {
-            let destination_buffer_channels = self.buffers[to_index.index()]
-                .as_ref()
-                .unwrap()
-                .num_channels();
-            channel_layout.clamp(destination_buffer_channels);
-        }
+                if to_index != self.output_node {
+                    let destination_buffer_channels = self.buffers[to_index.index()]
+                        .as_ref()
+                        .unwrap()
+                        .num_channels();
+                    channel_layout.clamp(destination_buffer_channels);
+                }
+                Some(channel_layout)
+            }
+        };
 
         let edge = ProcessorChannel::new(channel_layout);
 
@@ -230,7 +236,7 @@ impl<T: Sample> DspGraph<T> {
                 rewire.insert(dest, source);
             }
 
-            edge.channel_layout = channel_layout;
+            edge.channel_layout = Some(channel_layout);
 
             Ok(())
         } else {
@@ -334,7 +340,7 @@ impl<T: Sample> DspGraph<T> {
             // If there are multiple inputs, sum them
             if num_incoming_edges > 1 {
                 self.summing_buffer.clear();
-                let mut channel_layout = ChannelLayout::new(0);
+                let mut channel_layout: Option<ChannelLayout> = None;
 
                 for edge in incoming_edges {
                     let input_node = edge.source();
@@ -361,7 +367,13 @@ impl<T: Sample> DspGraph<T> {
                         self.summing_buffer.add(input_buffer, &edge_layout);
                     }
 
-                    channel_layout.combine(edge_layout);
+                    if let Some(edge_layout) = &edge_layout {
+                        if let Some(existing_layout) = &mut channel_layout {
+                            existing_layout.combine(edge_layout);
+                        } else {
+                            channel_layout = Some(edge_layout.clone());
+                        }
+                    }
                 }
 
                 let output_buffer: &mut dyn AudioBuffer<T> =
