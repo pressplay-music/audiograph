@@ -1,7 +1,7 @@
 use audiograph::{
+    DspGraph, GraphNode,
     buffer::{AudioBuffer, FrameSize, MultiChannelBuffer},
     channel::ChannelLayout,
-    DspGraph, GraphNode,
 };
 use clap::Parser;
 

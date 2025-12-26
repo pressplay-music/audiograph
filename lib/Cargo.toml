@@ -1,7 +1,7 @@
 [package]
 name = "audiograph"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 authors = ["Piotr Palka <coding@pressplay-music.com>"]
 description = "Realtime audio processing graph library"
 license = "MIT OR Apache-2.0"

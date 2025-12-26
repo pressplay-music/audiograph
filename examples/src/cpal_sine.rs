@@ -1,6 +1,6 @@
 use audiograph::{
-    buffer::{AudioBuffer, FrameSize, MultiChannelBuffer},
     DspGraph, GraphNode,
+    buffer::{AudioBuffer, FrameSize, MultiChannelBuffer},
 };
 use clap::Parser;
 use cpal::traits::*;

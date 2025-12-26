@@ -8,10 +8,10 @@ use crate::channel::ChannelLayout;
 use crate::processor::{NoOp, ProcessingContext, Processor};
 use crate::sample::Sample;
 
+use petgraph::Direction;
 use petgraph::graph::{EdgeIndex, NodeIndex};
 use petgraph::stable_graph::StableDiGraph;
 use petgraph::visit::{DfsPostOrder, EdgeRef, Reversed};
-use petgraph::Direction;
 
 use std::collections::HashMap;
 
@@ -736,9 +736,11 @@ mod tests {
             .add_processor(PassThrough {}, MultiChannelBuffer::new(1, FrameSize(10)))
             .unwrap();
 
-        assert!(graph
-            .add_processor(PassThrough {}, MultiChannelBuffer::new(1, FrameSize(10)))
-            .is_err());
+        assert!(
+            graph
+                .add_processor(PassThrough {}, MultiChannelBuffer::new(1, FrameSize(10)))
+                .is_err()
+        );
 
         graph.connect(GraphNode::Input, n1.into(), None).unwrap();
         graph.connect(n1.into(), n2.into(), None).unwrap();
