@@ -14,7 +14,7 @@
 - [ ] cleanup commit history if necessary
 - [ ] Clean API, error handling
 - [ ] design and implement different scenarios including edge cases
-- [ ] benchmark and compare with DASP audio graph
+- [x] benchmark and compare with DASP audio graph
 - [ ] unit tests
 - [ ] github actions
 - [ ] Documentation (incl. realtime safety)

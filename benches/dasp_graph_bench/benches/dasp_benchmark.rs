@@ -1,7 +1,6 @@
 use criterion::{criterion_group, criterion_main, Criterion};
 use std::hint::black_box;
 
-// DASP imports - uses petgraph 0.5 internally
 use dasp_graph::node::Node;
 use dasp_graph::{Buffer, NodeData};
 
@@ -15,10 +14,18 @@ impl BenchProcessor {
     }
 }
 
+struct EmptyProcessor;
+
+impl EmptyProcessor {
+    fn new() -> Self {
+        Self
+    }
+}
+
 enum GraphNode {
     Source,
     Processor(BenchProcessor),
-    EmptyProcessor, // For measuring graph overhead
+    EmptyProcessor(EmptyProcessor),
     Output,
 }
 
@@ -35,21 +42,8 @@ impl Node for GraphNode {
             GraphNode::Processor(processor) => {
                 processor.process(inputs, outputs);
             }
-            GraphNode::EmptyProcessor => {
-                // Empty processor - only does summing (DASP's node responsibility)
-                for output in outputs.iter_mut() {
-                    for sample in output.iter_mut() {
-                        *sample = 0.0;
-                    }
-                }
-                
-                for input in inputs.iter() {
-                    for (output_buffer, input_buffer) in outputs.iter_mut().zip(input.buffers().iter()) {
-                        for (out_sample, in_sample) in output_buffer.iter_mut().zip(input_buffer.iter()) {
-                            *out_sample += in_sample; // Only summing, no increment
-                        }
-                    }
-                }
+            GraphNode::EmptyProcessor(processor) => {
+                processor.process(inputs, outputs);
             }
             GraphNode::Output => {
                 for output in outputs.iter_mut() {
@@ -100,6 +94,25 @@ impl Node for BenchProcessor {
     }
 }
 
+impl Node for EmptyProcessor {
+    // Does zeroing and summing which is the Node's responsibility in dasp_graph
+    fn process(&mut self, inputs: &[dasp_graph::Input], outputs: &mut [Buffer]) {
+        for output in outputs.iter_mut() {
+            for sample in output.iter_mut() {
+                *sample = 0.0;
+            }
+        }
+
+        for input in inputs.iter() {
+            for (output_buffer, input_buffer) in outputs.iter_mut().zip(input.buffers().iter()) {
+                for (out_sample, in_sample) in output_buffer.iter_mut().zip(input_buffer.iter()) {
+                    *out_sample += in_sample;
+                }
+            }
+        }
+    }
+}
+
 type DaspGraph = petgraph::graph::DiGraph<NodeData<GraphNode>, ()>;
 type DaspProcessor = dasp_graph::Processor<DaspGraph>;
 
@@ -132,7 +145,7 @@ fn create_dasp_diamond_graph(
     }
 
     let total_nodes: usize = layer_sizes.iter().sum::<usize>() + 2; // +1 for source, +1 for output
-    // Note: Don't add extra edges to total_edges - use audiograph's counting method
+                                                                    // Note: Don't add extra edges to total_edges - use audiograph's counting method
 
     let mut graph = DaspGraph::with_capacity(total_nodes, total_edges);
     let processor = DaspProcessor::with_capacity(total_nodes);
@@ -151,7 +164,7 @@ fn create_dasp_diamond_graph(
         let mut layer_nodes = Vec::new();
         for _i in 0..nodes_in_layer {
             let graph_node = if use_empty {
-                GraphNode::EmptyProcessor
+                GraphNode::EmptyProcessor(EmptyProcessor::new())
             } else {
                 GraphNode::Processor(BenchProcessor::new(increment))
             };

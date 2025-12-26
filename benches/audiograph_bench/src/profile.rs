@@ -1,5 +1,5 @@
 use audiograph::buffer::{AudioBuffer, FrameSize, MultiChannelBuffer};
-use audiograph_bench::create_diamond_graph;
+use audiograph_bench_lib::create_diamond_graph;
 
 fn main() {
     let layers = 9;

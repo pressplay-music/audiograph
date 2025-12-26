@@ -2,7 +2,7 @@ use criterion::{criterion_group, criterion_main, Criterion};
 use std::hint::black_box;
 
 use audiograph::buffer::{AudioBuffer, FrameSize, MultiChannelBuffer};
-use audiograph_bench::create_diamond_graph;
+use audiograph_bench_lib::create_diamond_graph;
 
 fn bench_audiograph_performance(c: &mut Criterion) {
     // Graph overhead only (EmptyProcessor)
