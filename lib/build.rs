@@ -11,7 +11,7 @@ fn main() {
 
     std::fs::write(
         &dest_path,
-        format!("pub const MAX_CHANNELS: usize = {};", max_channels),
+        format!("pub const MAX_CHANNELS: usize = {max_channels};"),
     )
     .unwrap();
 

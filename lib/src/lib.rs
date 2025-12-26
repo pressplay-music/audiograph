@@ -217,10 +217,7 @@ impl<T: Sample> DspGraph<T> {
             edge.has_rewire = true;
 
             let mut channel_layout = ChannelLayout::new(0);
-            let rewire = self
-                .edge_rewires
-                .entry(edge_index)
-                .or_insert_with(HashMap::new);
+            let rewire = self.edge_rewires.entry(edge_index).or_default();
             rewire.clear();
 
             for &(source, dest) in rewire_mapping {
