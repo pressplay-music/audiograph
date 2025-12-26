@@ -10,7 +10,7 @@
 - [x] deal with channel layout connections and buffer max channel mismatch
 - [x] Processing context with less than initialized frames?
 - [x] Review realtime safety
-- [ ] Add license
+- [x] Add license
 - [ ] cleanup commit history if necessary
 - [ ] Clean API, error handling
 - [ ] design and implement different scenarios including edge cases
