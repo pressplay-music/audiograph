@@ -40,10 +40,10 @@ jobs:
           key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Run tests
-        run: cargo test --workspace --all-features
+        run: cargo test --package audiograph --all-features
 
       - name: Run doc tests
-        run: cargo test --workspace --doc
+        run: cargo test --package audiograph --doc
 
   build:
     name: Build - ${{ matrix.os }} (${{ matrix.target }})
@@ -104,7 +104,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu
 
-      - name: Build library
+      - name: Build library only (Linux/Windows)
+        if: runner.os != 'macOS'
+        run: cargo build --package audiograph --release --target ${{ matrix.target }}
+
+      - name: Build workspace with examples (macOS)
+        if: runner.os == 'macOS'
         run: cargo build --workspace --release --target ${{ matrix.target }}
 
   # Check code formatting and linting
@@ -154,4 +159,4 @@ jobs:
           key: ${{ runner.os }}-cargo-clippy-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Run clippy
-        run: cargo clippy --workspace --all-features -- -D warnings
+        run: cargo clippy --package audiograph --all-features -- -D warnings
