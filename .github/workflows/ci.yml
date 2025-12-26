@@ -112,6 +112,11 @@ jobs:
         if: runner.os == 'macOS'
         run: cargo build --workspace --release --target ${{ matrix.target }}
 
+      - name: Build benches workspace (macOS)
+        if: runner.os == 'macOS'
+        working-directory: benches
+        run: cargo build --workspace --release --target ${{ matrix.target }}
+
   # Check code formatting and linting
   fmt:
     name: Rustfmt

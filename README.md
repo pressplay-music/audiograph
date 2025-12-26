@@ -16,6 +16,6 @@
 - [ ] design and implement different scenarios including edge cases
 - [x] benchmark and compare with DASP audio graph
 - [ ] unit tests
-- [ ] github actions
+- [x] github actions
 - [ ] Documentation (incl. realtime safety)
 - [ ] publish on github and crates.io
