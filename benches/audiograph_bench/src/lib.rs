@@ -1,4 +1,7 @@
-use audiograph::processor::{ProcessingContext, Processor};
+use audiograph::{
+    buffer::{FrameSize, MultiChannelBuffer},
+    processor::{ProcessingContext, Processor},
+};
 
 pub struct BenchProcessor {
     increment: f32,
