@@ -2,6 +2,10 @@
 name = "audiograph"
 version = "0.1.0"
 edition = "2021"
+authors = ["Piotr Palka <coding@pressplay-music.com>"]
+description = ""
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/pressplay-music/audiograph"
 
 [dependencies]
 bitvec = "1.0.1"
