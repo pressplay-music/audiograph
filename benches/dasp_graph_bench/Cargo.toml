@@ -1,0 +1,13 @@
+[package]
+name = "dasp_graph_bench"
+version = "0.1.0"
+edition = "2021"
+
+[[bench]]
+name = "dasp_benchmark"
+harness = false
+
+[dependencies]
+criterion = "0.7.0"
+dasp_graph = "0.11.0"
+petgraph = "0.5"
