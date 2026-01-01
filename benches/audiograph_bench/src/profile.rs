@@ -1,4 +1,4 @@
-use audiograph::buffer::{AudioBuffer, FrameSize, MultiChannelBuffer};
+use audiograph::*;
 use audiograph_bench_lib::create_diamond_graph;
 
 fn main() {

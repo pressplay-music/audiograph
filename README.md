@@ -1,8 +1,8 @@
 # Audiograph
 
-**Audiograph is a real-time audio processing graph library written in Rust.**
+**A realtime audio processing graph library for Rust**
 
-It provides abstractions for audio processors, audio buffers, and channel routing, and enables the construction and management of directed signal processing graphs. Graph edges can explicitly encode the channel-based routing between processor nodes, allowing for flexible channel selection and reordering with minimal runtime overhead.
+Audiograph provides abstractions for audio processors, audio buffers and channel routing, and enables the construction and management of directed signal processing graphs. Graph edges can explicitly encode the channel-based routing between processor nodes, allowing for flexible channel selection and reordering with minimal runtime overhead.
 
 Audiograph supports modifying DSP graphs at runtime under real-time constraints, including adding or removing processor nodes, and changing connections between nodes.
 
@@ -13,11 +13,14 @@ The most basic functionality is shown below. For more advanced usage, refer to t
 ### Create a graph instance
 
 ```rust
-use audiograph::{DspGraph, buffer::FrameSize};
+use audiograph::{DspGraph, FrameSize};
 
 let num_channels = 2; // stereo
 let frame_size = FrameSize(256); // maximum number of samples per frame
-let max_num_edges = Some(20); // intended maximum number of edges in the graph, used for the preallocation of internal graph structures
+
+// intended maximum number of edges in the graph,
+// used for the preallocation of internal graph structures
+let max_num_edges = Some(20);
 
 // we use f32 as the sample type
 let mut dsp_graph = DspGraph::<f32>::new(num_channels, frame_size, max_num_edges);
@@ -28,10 +31,7 @@ let mut dsp_graph = DspGraph::<f32>::new(num_channels, frame_size, max_num_edges
 You have to implement the `Processor` trait for your custom processor types.
 
 ```rust
-use audiograph::{
-    processor::{ProcessingContext, Processor},
-    sample::Sample,
-};
+use audiograph::{ProcessingContext, Processor, Sample};
 
 struct MyProcessor;
 
@@ -47,7 +47,7 @@ impl<T: Sample> Processor<T> for MyProcessor {
 ### Add processor nodes to the graph
 
 ```rust
-use audiograph::buffer::MultiChannelBuffer;
+use audiograph::MultiChannelBuffer;
 
 // allocate a sample buffer that the processor node can write into
 let node_buffer = MultiChannelBuffer::new(num_channels, frame_size);
@@ -100,11 +100,11 @@ dsp_graph.process(&input_buffer, &mut output_buffer, frame_size);
 
 - The acyclic directed graph structure is implemented using the `petgraph` crate (https://github.com/petgraph/petgraph).
 
-### A Note on Performance
+### A note on performance
 
 The graph is designed to be efficient, although that is not its primary goal. There are minor performance penalties stemming from branching, lookups, and dynamic dispatching. For typical use cases, most of the CPU time is likely spent on the audio processing code itself, with minimal overhead from graph management.
 
-Iterating over a `ChannelLayout` can be costly because this it means iterating over a bit set.
+Iterating over a `ChannelLayout` can be a bit costly because this struct is organized as a bit set.
 
 If you have very high performance requirements, consider not using a graph structure at all.
 

@@ -1,15 +1,79 @@
+//! Audiograph - a realtime audio processing graph library for Rust.
+//!
+//! Audiograph provides abstractions for audio processors, audio buffers and channel routing,
+//! and enables the construction and management of directed signal processing graphs.
+//!
+//! # Building blocks
+//!
+//! [`DspGraph`] represents the main graph structure. It contains audio processing nodes and typed edges
+//! that describe the signal flow between nodes. The major building blocks for constructing and using
+//! a [`DspGraph`] are:
+//!
+//! - [`Processor`]: Trait representing an audio processing unit. Processors are the core of a graph node.
+//! Conceptually, a graph node consists of a processor and its associated output buffer.
+//! - [`AudioBuffer`]: Trait representing a buffer of audio samples organized by channels. There are multiple
+//! implementations provided, including [`MultiChannelBuffer`] that owns channels of audio data and
+//! [`MultiChannelBufferView`] as a non-owning alternative.
+//! - [`ChannelLayout`]: Struct describing the active channels of a connection between nodes. The edges
+//! of the graph carry optional channel layouts to indicate which channels of a node's output buffer
+//! should be processed by connected successor nodes.
+//! - [`ProcessingContext`]: Struct providing context for audio processing, including input and output buffer
+//! references, channel layout and the number of frames to process. Used by a [`Processor`] as the source
+//! of information for processing audio data.
+//!
+//! # Graph structure
+//!
+//! A [`DspGraph`] is a directed graph where nodes represent audio processors and edges represent
+//! the signal flow between processors. It is possible for a node to have multiple incoming edges,
+//! in which case the inputs are summed before being passed to the processor. Similarly, a node can have
+//! multiple outgoing edges, allowing its output to be routed to multiple successor nodes.
+//!
+//! Edges of the graph are typed edges carrying additional information about the connection between nodes,
+//! allowing complex routing scenarios such as channel selection and remapping.
+//!
+//! A graph can be designed and modified using the provided API, most notably using the following construction
+//! methods:
+//! - `add_processor`: Adds a new processor node to the graph along with its associated output buffer.
+//! - `connect`: Connects two nodes in the graph with an edge, optionally specifying a channel layout.
+//!
+//! Additional methods are provided for more advanced operations, such as rewiring connections, enabling and
+//! disabling edges and removing connections.
+//!
+//! Graph nodes and edges are identified using the `NodeIndex` and `EdgeIndex` types from the `petgraph` crate,
+//! which is used as the underlying acyclic directed graph implementation.
+//!
+//! Input and output nodes: These are special nodes that serve as the entry and exit points of the graph.
+//! Input and output nodes do not process any audio data and do not have dedicated buffers within the graph
+//! structure. The corresponding buffers are passed to the [`DspGraph::process`] method instead. See also [`GraphNode`]
+//! and [`DspGraph::connect`].
+//!
+//! # Realtime safety
+//!
+//! Realtime safety is guaranteed for most of the graph operations, including processing and modifying
+//! the graph structure. Some operations, such as rewiring connections, are not realtime-safe and
+//! indicated as such.
+//!
+//! Adding a node to the graph requires the node's audio buffer to be allocated. It is the caller's
+//! responsibility to ensure this allocation is performed safely and not on the high-priority audio thread.
+//!
+//! Graph-internal memory allocations are performed upfront during graph initialization. Adding nodes
+//! or edges within the specified graph capacity limits does not allocate.
+//!
+
 pub mod buffer;
 pub mod channel;
 pub mod processor;
 pub mod sample;
 
-use crate::buffer::{AudioBuffer, FrameSize, MultiChannelBuffer, RewiredBufferView};
-use crate::channel::ChannelLayout;
-use crate::processor::{NoOp, ProcessingContext, Processor};
-use crate::sample::Sample;
+pub use crate::buffer::*;
+pub use crate::channel::*;
+pub use crate::processor::*;
+pub use crate::sample::*;
+
+#[doc(no_inline)]
+pub use petgraph::graph::{EdgeIndex, NodeIndex};
 
 use petgraph::Direction;
-use petgraph::graph::{EdgeIndex, NodeIndex};
 use petgraph::stable_graph::StableDiGraph;
 use petgraph::visit::{DfsPostOrder, EdgeRef, Reversed};
 
@@ -17,6 +81,7 @@ use std::collections::HashMap;
 
 pub type AudioGraphError = &'static str;
 
+/// The node type of the graph
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GraphNode {
     Input,
