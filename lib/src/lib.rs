@@ -10,16 +10,15 @@
 //! a [`DspGraph`] are:
 //!
 //! - [`Processor`]: Trait representing an audio processing unit. Processors are the core of a graph node.
-//! Conceptually, a graph node consists of a processor and its associated output buffer.
-//! - [`AudioBuffer`]: Trait representing a buffer of audio samples organized by channels. There are multiple
-//! implementations provided, including [`MultiChannelBuffer`] that owns channels of audio data and
-//! [`MultiChannelBufferView`] as a non-owning alternative.
-//! - [`ChannelLayout`]: Struct describing the active channels of a connection between nodes. The edges
-//! of the graph carry optional channel layouts to indicate which channels of a node's output buffer
-//! should be processed by connected successor nodes.
+//!   Conceptually, a graph node consists of a processor and its associated output buffer.
+//! - [`AudioBuffer`]: Trait representing a buffer of audio samples organized by channels. Multiple
+//!   implementations are provided, including [`MultiChannelBuffer`] (owning) and
+//!   [`MultiChannelBufferView`] (non-owning).
+//! - [`ChannelLayout`]: Struct describing the active channels of a connection between nodes. Graph edges
+//!   can carry an optional channel layout to indicate which channels of a node's output buffer are
+//!   processed by connected successor nodes.
 //! - [`ProcessingContext`]: Struct providing context for audio processing, including input and output buffer
-//! references, channel layout and the number of frames to process. Used by a [`Processor`] as the source
-//! of information for processing audio data.
+//!   references, the channel layout, and the number of frames to process.
 //!
 //! # Graph structure
 //!
@@ -33,14 +32,14 @@
 //!
 //! A graph can be designed and modified using the provided API, most notably using the following construction
 //! methods:
-//! - `add_processor`: Adds a new processor node to the graph along with its associated output buffer.
-//! - `connect`: Connects two nodes in the graph with an edge, optionally specifying a channel layout.
+//! - [`DspGraph::add_processor`]: Adds a new processor node to the graph along with its associated output buffer.
+//! - [`DspGraph::connect`]: Connects two nodes in the graph with an edge, optionally specifying a channel layout.
 //!
 //! Additional methods are provided for more advanced operations, such as rewiring connections, enabling and
 //! disabling edges and removing connections.
 //!
 //! Graph nodes and edges are identified using the `NodeIndex` and `EdgeIndex` types from the `petgraph` crate,
-//! which is used as the underlying acyclic directed graph implementation.
+//! which provides the underlying directed graph implementation.
 //!
 //! Input and output nodes: These are special nodes that serve as the entry and exit points of the graph.
 //! Input and output nodes do not process any audio data and do not have dedicated buffers within the graph
@@ -49,9 +48,9 @@
 //!
 //! # Realtime safety
 //!
-//! Realtime safety is guaranteed for most of the graph operations, including processing and modifying
+//! Realtime safety is guaranteed for most graph operations, including processing and modifying
 //! the graph structure. Some operations, such as rewiring connections, are not realtime-safe and
-//! indicated as such.
+//! are documented as such.
 //!
 //! Adding a node to the graph requires the node's audio buffer to be allocated. It is the caller's
 //! responsibility to ensure this allocation is performed safely and not on the high-priority audio thread.
@@ -81,7 +80,9 @@ use std::collections::HashMap;
 
 pub type AudioGraphError = &'static str;
 
-/// The node type of the graph
+/// Identifier for a graph node
+///
+/// Input and Output nodes are special nodes representing the entry and exit points of the graph.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GraphNode {
     Input,
@@ -112,6 +113,10 @@ impl<T: Sample> ProcessorNode<T> {
     }
 }
 
+/// Represents an edge between two processor nodes in the audio graph
+///
+/// Contains information about channel layout, rewiring of channels, and whether the connection is enabled
+/// or disabled.
 #[derive(Clone)]
 struct ProcessorChannel {
     pub channel_layout: Option<ChannelLayout>,
@@ -136,6 +141,20 @@ impl ProcessorChannel {
 type GraphVisitMap<T> =
     <StableDiGraph<ProcessorNode<T>, ProcessorChannel> as petgraph::visit::Visitable>::Map;
 
+/// Directed graph structure for audio processing
+///
+/// Consists of processor nodes and typed edges that describe the signal flow.
+/// When constructing a [`DspGraph`], a capacity needs to be provided to preallocate internal data
+/// structures. This ensures realtime safety when adding nodes and edges at runtime.
+///
+/// Nodes and edges can be added using the [`DspGraph::add_processor`] and [`DspGraph::connect`] methods.
+/// Connections can also be dynamically enabled, disabled or updated. Additionally, it is possible to
+/// rewire the channels of an existing connection, though this operation is not realtime-safe.
+///
+/// The graph owns the processing nodes as well as their corresponding output buffers. Conversely,
+/// the input and output buffers that the graph operates on must be managed outside of the graph structure.
+/// To run the audio processing graph, use the [`DspGraph::process`] method, which takes the input
+/// and output buffers as arguments.
 pub struct DspGraph<T: Sample> {
     graph: StableDiGraph<ProcessorNode<T>, ProcessorChannel>,
     topo_order: Vec<NodeIndex>, // Pre-allocated processing order vector
@@ -149,6 +168,13 @@ pub struct DspGraph<T: Sample> {
 }
 
 impl<T: Sample> DspGraph<T> {
+    /// Creates a new [`DspGraph`] with preallocated capacity for internal data structures
+    ///
+    /// - `num_channels`: Maximum number of channels a node will process. Needs to be known upfront for
+    /// summing operations.
+    /// - `frame_size`: Maximum number of frames for block-wise processing.
+    /// - `max_num_edges`: Graph capacity used for preallocation. This value also bounds the maximum
+    ///   number of nodes that can be added. If `None`, defaults to 64.
     pub fn new(num_channels: usize, frame_size: FrameSize, max_num_edges: Option<usize>) -> Self {
         let max_num_edges = max_num_edges.unwrap_or(64);
 
@@ -181,6 +207,10 @@ impl<T: Sample> DspGraph<T> {
         graph
     }
 
+    /// Adds a processor node to the graph along with its associated output buffer
+    ///
+    /// Returns the `NodeIndex` of the newly added processor node (or an error if something went wrong).
+    /// The node index can be used to reference the node when adding an edge to it using [`DspGraph::connect`].
     pub fn add_processor<P: Processor<T> + Send + 'static>(
         &mut self,
         processor: P,
@@ -204,6 +234,18 @@ impl<T: Sample> DspGraph<T> {
         Ok(node_index)
     }
 
+    /// Connects two nodes in the graph with an edge
+    ///
+    /// The direction of the edge is so that the `to` node will access the output buffer of the `from` node
+    /// as its input buffer during processing. These nodes can be either processor nodes added via
+    /// [`DspGraph::add_processor`], or the input or output nodes of the entire graph (see [`GraphNode`]).
+    ///
+    /// Optionally, a [`ChannelLayout`] can be provided to specify which channels of the `from` node's output buffer
+    /// should be processed by the `to` node. If no channel layout is provided, all channels are connected by default.
+    ///
+    /// Returns the `EdgeIndex` of the newly created edge (or an error if something went wrong).
+    /// The edge index can be used to reference the edge for further operations such as rewiring or enabling/disabling
+    /// the connection.
     pub fn connect(
         &mut self,
         from: GraphNode,
@@ -278,7 +320,55 @@ impl<T: Sample> DspGraph<T> {
         Ok(edge_index)
     }
 
-    /// NOT realtime-safe
+    /// Rewires an existing connection in the graph to use a different channel mapping
+    /// between the edge's source and destination nodes.
+    ///
+    /// **NOT realtime safe**
+    ///
+    /// The `rewire_mapping` parameter is a slice of tuples where each tuple defines a channel mapping
+    /// in the form `(source_channel, destination_channel)`.
+    ///
+    /// Note: Mapping multiple source channels to the same destination channel returns an error.
+    ///
+    /// # Example
+    /// ```rust
+    /// use audiograph::{DspGraph, FrameSize, GraphNode, MultiChannelBuffer};
+    ///
+    /// let frame_size = FrameSize(1024);
+    ///
+    /// let mut dsp_graph = DspGraph::<f32>::new(4, frame_size, None);
+    ///
+    /// let node1 = dsp_graph
+    ///     .add_processor(
+    ///         MyProcessor {},
+    ///         MultiChannelBuffer::new(4, frame_size), // 4 output channels
+    ///     )
+    ///     .unwrap();
+    ///
+    /// let node2 = dsp_graph
+    ///     .add_processor(
+    ///         MyProcessor {},
+    ///         MultiChannelBuffer::new(4, frame_size), // 4 output channels
+    ///     )
+    ///     .unwrap();
+    ///
+    /// // Connect nodes with default channel layout (i.e., all channels in order)
+    /// dsp_graph
+    ///     .connect(GraphNode::Input, node1.into(), None)
+    ///     .unwrap();
+    ///
+    /// let edge = dsp_graph.connect(node1.into(), node2.into(), None).unwrap();
+    ///
+    /// dsp_graph
+    ///     .connect(node2.into(), GraphNode::Output, None)
+    ///     .unwrap();
+    ///
+    /// // Rewire the edge to swap channels 0 and 1, while keeping channels 2 and 3 the same
+    /// dsp_graph
+    ///     .rewire(edge, &[(0, 1), (1, 0), (2, 2), (3, 3)])
+    ///     .unwrap();
+    /// ```
+    ///
     pub fn rewire(
         &mut self,
         edge_index: EdgeIndex,
@@ -295,7 +385,9 @@ impl<T: Sample> DspGraph<T> {
                 channel_layout.connect(dest);
 
                 // we flip (source, dest) to have logical to physical mapping
-                rewire.insert(dest, source);
+                if rewire.insert(dest, source).is_some() {
+                    return Err("Duplicate destination channel in rewire mapping");
+                }
             }
 
             edge.channel_layout = Some(channel_layout);
@@ -306,7 +398,9 @@ impl<T: Sample> DspGraph<T> {
         }
     }
 
-    /// NOT realtime-safe
+    /// **NOT realtime-safe**
+    ///
+    /// TODO: a valid channel layout is not established after removal!
     pub fn remove_rewire(&mut self, edge_index: EdgeIndex) -> Result<(), AudioGraphError> {
         if let Some(edge) = self.graph.edge_weight_mut(edge_index) {
             edge.has_rewire = false;
@@ -317,7 +411,11 @@ impl<T: Sample> DspGraph<T> {
         }
     }
 
-    /// NOT realtime-safe
+    /// Connects two nodes and creates a rewired mapping in one step
+    ///
+    /// **NOT realtime-safe**
+    ///
+    /// See [`DspGraph::connect`] and [`DspGraph::rewire`] for details.
     pub fn connect_rewired(
         &mut self,
         from: GraphNode,
@@ -330,6 +428,7 @@ impl<T: Sample> DspGraph<T> {
         Ok(edge)
     }
 
+    /// Removes an existing connection from the graph
     pub fn remove_connection(&mut self, edge: EdgeIndex) -> Result<(), AudioGraphError> {
         // Note: Rewire information (if any) is deliberately leaked for RT-safety
         self.graph.remove_edge(edge).ok_or("Edge not found")?;
@@ -337,6 +436,7 @@ impl<T: Sample> DspGraph<T> {
         Ok(())
     }
 
+    /// Enables an existing connection in the graph
     pub fn enable_connection(&mut self, edge: EdgeIndex) -> Result<(), AudioGraphError> {
         if let Some(edge_weight) = self.graph.edge_weight_mut(edge) {
             edge_weight.enabled = true;
@@ -346,6 +446,7 @@ impl<T: Sample> DspGraph<T> {
         }
     }
 
+    /// Disables an existing connection in the graph
     pub fn disable_connection(&mut self, edge: EdgeIndex) -> Result<(), AudioGraphError> {
         if let Some(edge_weight) = self.graph.edge_weight_mut(edge) {
             edge_weight.enabled = false;
@@ -375,6 +476,7 @@ impl<T: Sample> DspGraph<T> {
         }
     }
 
+    /// Processes audio data through the graph
     pub fn process(
         &mut self,
         input: &dyn AudioBuffer<T>,

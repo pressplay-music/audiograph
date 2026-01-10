@@ -113,3 +113,7 @@ If you have very high performance requirements, consider not using a graph struc
 The `dasp_graph` module of the `DASP` crate (https://github.com/RustAudio/dasp/tree/master/dasp_graph) provides an alternative audio graph implementation in Rust, also built on top of `petgraph`. It is more generic and lower-level, with certain structural constraints.
 
 Audiograph places more responsibility on the graph itself to express e.g. complex routing, allowing processing nodes to remain context-agnostic. This design introduces slightly higher graph overhead.
+
+## TODO
+
+- [ ] Make rewiring of edges realtime-safe (e.g. by using fixed-size arrays for channel mappings)
