@@ -171,7 +171,7 @@ impl<T: Sample> DspGraph<T> {
     /// Creates a new [`DspGraph`] with preallocated capacity for internal data structures
     ///
     /// - `num_channels`: Maximum number of channels a node will process. Needs to be known upfront for
-    /// summing operations.
+    ///   summing operations.
     /// - `frame_size`: Maximum number of frames for block-wise processing.
     /// - `max_num_edges`: Graph capacity used for preallocation. This value also bounds the maximum
     ///   number of nodes that can be added. If `None`, defaults to 64.
@@ -332,7 +332,7 @@ impl<T: Sample> DspGraph<T> {
     ///
     /// # Example
     /// ```rust
-    /// use audiograph::{DspGraph, FrameSize, GraphNode, MultiChannelBuffer};
+    /// use audiograph::{DspGraph, FrameSize, GraphNode, MultiChannelBuffer, NoOp};
     ///
     /// let frame_size = FrameSize(1024);
     ///
@@ -340,14 +340,14 @@ impl<T: Sample> DspGraph<T> {
     ///
     /// let node1 = dsp_graph
     ///     .add_processor(
-    ///         MyProcessor {},
+    ///         NoOp {},
     ///         MultiChannelBuffer::new(4, frame_size), // 4 output channels
     ///     )
     ///     .unwrap();
     ///
     /// let node2 = dsp_graph
     ///     .add_processor(
-    ///         MyProcessor {},
+    ///         NoOp {},
     ///         MultiChannelBuffer::new(4, frame_size), // 4 output channels
     ///     )
     ///     .unwrap();
