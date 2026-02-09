@@ -101,15 +101,13 @@ dsp_graph.process(&input_buffer, &mut output_buffer, frame_size);
 
 - There is a maximum number of channels the `DspGraph` can process. The default value is 64, but it can be changed at compile time by setting the `MAX_CHANNELS` environment variable when building the library. It is not worth to make this value smaller. Higher values will introduce slightly more processing overhead.
 
-- The acyclic directed graph structure is implemented using the `petgraph` crate (https://github.com/petgraph/petgraph).
+- The directed graph structure is implemented using the `petgraph` crate (https://github.com/petgraph/petgraph).
 
 ### A note on performance
 
-The graph is designed to be efficient, although that is not its primary goal. There are minor performance penalties stemming from branching, lookups, and dynamic dispatching. For typical use cases, most of the CPU time is likely spent on the audio processing code itself, with minimal overhead from graph management.
+Audiograph is designed with flexibility and composability as its primary goals — enabling complex channel routing, runtime graph modification, and context-agnostic processors. The graph infrastructure is engineered to keep overhead low, and for typical use cases the vast majority of CPU time is spent in the audio processing code. There are, however, some performance penalties to be aware of: branching, lookups and dynamic dispatching are part of the graph traversal. For extremely performance-critical applications, it may be better to define larger-scope processing nodes or to not use a graph structure at all.
 
-Iterating over a `ChannelLayout` can be a bit costly because this struct is organized as a bit set.
-
-If you have very high performance requirements, consider not using a graph structure at all.
+Iterating over a `ChannelLayout` involves bit set operations, which can impose some performance overhead. This is the trade-off for its compact and flexible channel selection representation.
 
 ## Alternatives
 
