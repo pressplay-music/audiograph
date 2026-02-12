@@ -1,5 +1,5 @@
 use audiograph::{
-    DspGraph, GraphNode,
+    GraphNode, RewireDspGraph,
     buffer::{AudioBuffer, FrameSize, MultiChannelBuffer},
     channel::ChannelLayout,
 };
@@ -18,7 +18,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
     let frame_size = FrameSize(4);
 
-    let mut dsp_graph = DspGraph::<f32>::new(2, frame_size, Some(8));
+    let mut dsp_graph = RewireDspGraph::<f32>::new(2, frame_size, Some(8));
 
     let sine_node = dsp_graph
         .add_processor(
