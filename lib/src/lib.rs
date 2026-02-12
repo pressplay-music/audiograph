@@ -35,8 +35,11 @@
 //! - [`DspGraph::add_processor`]: Adds a new processor node to the graph along with its associated output buffer.
 //! - [`DspGraph::connect`]: Connects two nodes in the graph with an edge, optionally specifying a channel layout.
 //!
-//! Additional methods are provided for more advanced operations, such as rewiring connections, enabling and
+//! Additional methods are provided for more advanced operations, such as enabling and
 //! disabling edges and removing connections.
+//!
+//! For channel rewiring support, see [`RewireDspGraph`], which extends the base graph with
+//! the ability to remap channels on existing connections.
 //!
 //! Graph nodes and edges are identified using the `NodeIndex` and `EdgeIndex` types from the `petgraph` crate,
 //! which provides the underlying directed graph implementation.
@@ -48,9 +51,9 @@
 //!
 //! # Realtime safety
 //!
-//! Realtime safety is guaranteed for most graph operations, including processing and modifying
-//! the graph structure. Some operations, such as rewiring connections, are not realtime-safe and
-//! are documented as such.
+//! Realtime safety is guaranteed for all [`DspGraph`] operations, including processing and modifying
+//! the graph structure. [`RewireDspGraph`] additionally supports channel rewiring, which is not
+//! realtime-safe and is documented as such.
 //!
 //! Adding a node to the graph requires the node's audio buffer to be allocated. It is the caller's
 //! responsibility to ensure this allocation is performed safely and not on the high-priority audio thread.
@@ -148,8 +151,9 @@ type GraphVisitMap<T> =
 /// structures. This ensures realtime safety when adding nodes and edges at runtime.
 ///
 /// Nodes and edges can be added using the [`DspGraph::add_processor`] and [`DspGraph::connect`] methods.
-/// Connections can also be dynamically enabled, disabled or updated. Additionally, it is possible to
-/// rewire the channels of an existing connection, though this operation is not realtime-safe.
+/// Connections can also be dynamically enabled, disabled or updated.
+///
+/// For channel rewiring support, see [`RewireDspGraph`].
 ///
 /// The graph owns the processing nodes as well as their corresponding output buffers. Conversely,
 /// the input and output buffers that the graph operates on must be managed outside of the graph structure.
@@ -164,7 +168,6 @@ pub struct DspGraph<T: Sample> {
     summing_buffer: MultiChannelBuffer<T>,
     dfs_visitor: DfsPostOrder<NodeIndex, GraphVisitMap<T>>,
     topo_dirty: bool,
-    edge_rewires: HashMap<EdgeIndex, HashMap<usize, usize>>,
 }
 
 impl<T: Sample> DspGraph<T> {
@@ -192,7 +195,6 @@ impl<T: Sample> DspGraph<T> {
             summing_buffer: MultiChannelBuffer::new(num_channels, frame_size),
             dfs_visitor: DfsPostOrder::default(),
             topo_dirty: true,
-            edge_rewires: HashMap::with_capacity(max_num_edges),
         };
 
         graph.input_node = graph
@@ -239,6 +241,345 @@ impl<T: Sample> DspGraph<T> {
     /// The direction of the edge is so that the `to` node will access the output buffer of the `from` node
     /// as its input buffer during processing. These nodes can be either processor nodes added via
     /// [`DspGraph::add_processor`], or the input or output nodes of the entire graph (see [`GraphNode`]).
+    ///
+    /// Optionally, a [`ChannelLayout`] can be provided to specify which channels of the `from` node's output buffer
+    /// should be processed by the `to` node. If no channel layout is provided, all channels are connected by default.
+    ///
+    /// Returns the `EdgeIndex` of the newly created edge (or an error if something went wrong).
+    /// The edge index can be used to reference the edge for further operations such as enabling/disabling
+    /// the connection.
+    pub fn connect(
+        &mut self,
+        from: GraphNode,
+        to: GraphNode,
+        channel_layout: Option<ChannelLayout>,
+    ) -> Result<EdgeIndex, AudioGraphError> {
+        if self.graph.edge_count() >= self.graph.capacity().1 {
+            return Err("Graph edge capacity exceeded");
+        }
+
+        // invalid combinations
+        if let (GraphNode::Input, GraphNode::Input)
+        | (GraphNode::Node(_), GraphNode::Input)
+        | (GraphNode::Output, _) = (from, to)
+        {
+            return Err("Invalid connection");
+        }
+
+        let from_index = match from {
+            GraphNode::Input => self.input_node,
+            GraphNode::Output => self.output_node,
+            GraphNode::Node(idx) => idx,
+        };
+        let to_index = match to {
+            GraphNode::Input => self.input_node,
+            GraphNode::Output => self.output_node,
+            GraphNode::Node(idx) => idx,
+        };
+
+        if self.graph.node_weight(from_index).is_none() {
+            return Err("Source node does not exist");
+        }
+        if self.graph.node_weight(to_index).is_none() {
+            return Err("Destination node does not exist");
+        }
+
+        let channel_layout = match channel_layout {
+            None => None,
+            Some(layout) => {
+                let mut channel_layout = layout;
+
+                if from_index != self.input_node {
+                    let source_buffer_channels = self.buffers[from_index.index()]
+                        .as_ref()
+                        .unwrap()
+                        .num_channels();
+                    channel_layout.clamp(source_buffer_channels);
+                }
+
+                if to_index != self.output_node {
+                    let destination_buffer_channels = self.buffers[to_index.index()]
+                        .as_ref()
+                        .unwrap()
+                        .num_channels();
+                    channel_layout.clamp(destination_buffer_channels);
+                }
+                Some(channel_layout)
+            }
+        };
+
+        let edge = ProcessorChannel::new(channel_layout);
+
+        let edge_index = match self.graph.find_edge(from_index, to_index) {
+            Some(existing_edge_index) => {
+                *self.graph.edge_weight_mut(existing_edge_index).unwrap() = edge;
+                existing_edge_index
+            }
+            None => self.graph.add_edge(from_index, to_index, edge),
+        };
+
+        self.topo_dirty = true;
+        Ok(edge_index)
+    }
+
+    /// Removes an existing connection from the graph
+    pub fn remove_connection(&mut self, edge: EdgeIndex) -> Result<(), AudioGraphError> {
+        self.graph.remove_edge(edge).ok_or("Edge not found")?;
+        self.topo_dirty = true;
+        Ok(())
+    }
+
+    /// Enables an existing connection in the graph
+    pub fn enable_connection(&mut self, edge: EdgeIndex) -> Result<(), AudioGraphError> {
+        if let Some(edge_weight) = self.graph.edge_weight_mut(edge) {
+            edge_weight.enabled = true;
+            Ok(())
+        } else {
+            Err("Edge not found")
+        }
+    }
+
+    /// Disables an existing connection in the graph
+    pub fn disable_connection(&mut self, edge: EdgeIndex) -> Result<(), AudioGraphError> {
+        if let Some(edge_weight) = self.graph.edge_weight_mut(edge) {
+            edge_weight.enabled = false;
+            Ok(())
+        } else {
+            Err("Edge not found")
+        }
+    }
+
+    fn ensure_topo_order_updated(&mut self) {
+        if self.topo_dirty {
+            self.topo_order.clear(); // clear but keep preallocated size
+
+            self.dfs_visitor.reset(&self.graph);
+            let reversed = Reversed(&self.graph);
+            for start_node in self
+                .graph
+                .neighbors_directed(self.output_node, Direction::Incoming)
+            {
+                self.dfs_visitor.move_to(start_node);
+                while let Some(node) = self.dfs_visitor.next(&reversed) {
+                    self.topo_order.push(node);
+                }
+            }
+
+            self.topo_dirty = false;
+        }
+    }
+
+    /// Processes audio data through the graph
+    pub fn process(
+        &mut self,
+        input: &dyn AudioBuffer<T>,
+        output: &mut dyn AudioBuffer<T>,
+        num_frames: FrameSize,
+    ) {
+        self.ensure_topo_order_updated(); // update node order if necessary
+
+        output.clear();
+
+        for &node_index in &self.topo_order {
+            if node_index == self.output_node {
+                continue;
+            }
+
+            let output_buffer_index = node_index.index();
+
+            let mut incoming_edges = self
+                .graph
+                .edges_directed(node_index, Direction::Incoming)
+                .filter(|edge| edge.weight().enabled);
+
+            let num_incoming_edges = incoming_edges.clone().count();
+
+            // If there are multiple inputs, sum them
+            if num_incoming_edges > 1 {
+                self.summing_buffer.clear();
+                let mut channel_layout: Option<ChannelLayout> = None;
+
+                for edge in incoming_edges {
+                    let input_node = edge.source();
+                    let input_buffer: &dyn AudioBuffer<T> = if input_node == self.input_node {
+                        input
+                    } else {
+                        let input_buffer_index = input_node.index();
+                        self.buffers[input_buffer_index].as_ref().unwrap()
+                    };
+
+                    let edge_layout = edge.weight().get_layout();
+
+                    self.summing_buffer.add(input_buffer, &edge_layout);
+
+                    if let Some(edge_layout) = &edge_layout {
+                        if let Some(existing_layout) = &mut channel_layout {
+                            existing_layout.combine(edge_layout);
+                        } else {
+                            channel_layout = Some(edge_layout.clone());
+                        }
+                    }
+                }
+
+                let output_buffer: &mut dyn AudioBuffer<T> =
+                    self.buffers[output_buffer_index].as_mut().unwrap();
+                let processor_node = self.graph.node_weight_mut(node_index).unwrap();
+
+                let mut context = ProcessingContext::create_unchecked(
+                    &self.summing_buffer,
+                    output_buffer,
+                    channel_layout,
+                    num_frames,
+                );
+
+                processor_node.process(&mut context);
+            } else if num_incoming_edges == 1 {
+                let (input_node, channel_layout) = {
+                    let edge = incoming_edges.next().unwrap();
+                    (edge.source(), edge.weight().get_layout())
+                };
+
+                let (input_buffer, output_buffer): (&dyn AudioBuffer<T>, &mut dyn AudioBuffer<T>) =
+                    if input_node == self.input_node {
+                        let output_buffer = self.buffers[output_buffer_index].as_mut().unwrap();
+                        (input, output_buffer)
+                    } else {
+                        let input_buffer_index = input_node.index();
+                        let (low, high) = self.buffers.split_at_mut(output_buffer_index);
+                        (
+                            low[input_buffer_index].as_ref().unwrap(),
+                            high[0].as_mut().unwrap(),
+                        )
+                    };
+
+                let processor_node = self.graph.node_weight_mut(node_index).unwrap();
+
+                let mut context = ProcessingContext::create_unchecked(
+                    input_buffer,
+                    output_buffer,
+                    channel_layout,
+                    num_frames,
+                );
+                processor_node.process(&mut context);
+            }
+        }
+
+        for edge in self
+            .graph
+            .edges_directed(self.output_node, Direction::Incoming)
+            .filter(|e| e.weight().enabled)
+        {
+            let node = edge.source();
+            let node_buffer: &dyn AudioBuffer<T> = if node == self.input_node {
+                input
+            } else {
+                let input_buffer_index = node.index();
+                self.buffers[input_buffer_index].as_ref().unwrap()
+            };
+            // TODO: handle disconnected channels
+            output.add(node_buffer, &edge.weight().get_layout());
+        }
+    }
+}
+
+/// Directed graph structure for audio processing
+///
+/// Consists of processor nodes and typed edges that describe the signal flow.
+/// When constructing a [`DspGraph`], a capacity needs to be provided to preallocate internal data
+/// structures. This ensures realtime safety when adding nodes and edges at runtime.
+///
+/// Nodes and edges can be added using the [`DspGraph::add_processor`] and [`DspGraph::connect`] methods.
+/// Connections can also be dynamically enabled, disabled or updated. Additionally, it is possible to
+/// rewire the channels of an existing connection, though this operation is not realtime-safe.
+///
+/// The graph owns the processing nodes as well as their corresponding output buffers. Conversely,
+/// the input and output buffers that the graph operates on must be managed outside of the graph structure.
+/// To run the audio processing graph, use the [`DspGraph::process`] method, which takes the input
+/// and output buffers as arguments.
+pub struct RewireDspGraph<T: Sample> {
+    graph: StableDiGraph<ProcessorNode<T>, ProcessorChannel>,
+    topo_order: Vec<NodeIndex>, // Pre-allocated processing order vector
+    buffers: Vec<Option<MultiChannelBuffer<T>>>,
+    input_node: NodeIndex,
+    output_node: NodeIndex,
+    summing_buffer: MultiChannelBuffer<T>,
+    dfs_visitor: DfsPostOrder<NodeIndex, GraphVisitMap<T>>,
+    topo_dirty: bool,
+    edge_rewires: HashMap<EdgeIndex, HashMap<usize, usize>>,
+}
+
+impl<T: Sample> RewireDspGraph<T> {
+    /// Creates a new [`RewireDspGraph`] with preallocated capacity for internal data structures
+    ///
+    /// - `num_channels`: Maximum number of channels a node will process. Needs to be known upfront for
+    ///   summing operations.
+    /// - `frame_size`: Maximum number of frames for block-wise processing.
+    /// - `max_num_edges`: Graph capacity used for preallocation. This value also bounds the maximum
+    ///   number of nodes that can be added. If `None`, defaults to 64.
+    pub fn new(num_channels: usize, frame_size: FrameSize, max_num_edges: Option<usize>) -> Self {
+        let max_num_edges = max_num_edges.unwrap_or(64);
+
+        let mut buffers = Vec::with_capacity(max_num_edges);
+        for _ in 0..max_num_edges {
+            buffers.push(None);
+        }
+
+        let mut graph = RewireDspGraph {
+            graph: StableDiGraph::with_capacity(max_num_edges, max_num_edges),
+            topo_order: Vec::with_capacity(max_num_edges),
+            buffers,
+            input_node: NodeIndex::end(),
+            output_node: NodeIndex::end(),
+            summing_buffer: MultiChannelBuffer::new(num_channels, frame_size),
+            dfs_visitor: DfsPostOrder::default(),
+            topo_dirty: true,
+            edge_rewires: HashMap::with_capacity(max_num_edges),
+        };
+
+        graph.input_node = graph
+            .add_processor(NoOp, MultiChannelBuffer::new(0, FrameSize(0)))
+            .unwrap();
+        graph.output_node = graph
+            .add_processor(NoOp, MultiChannelBuffer::new(0, FrameSize(0)))
+            .unwrap();
+
+        graph.dfs_visitor = DfsPostOrder::empty(&graph.graph);
+
+        graph
+    }
+
+    /// Adds a processor node to the graph along with its associated output buffer
+    ///
+    /// Returns the `NodeIndex` of the newly added processor node (or an error if something went wrong).
+    /// The node index can be used to reference the node when adding an edge to it using [`RewireDspGraph::connect`].
+    pub fn add_processor<P: Processor<T> + Send + 'static>(
+        &mut self,
+        processor: P,
+        output_buffer: MultiChannelBuffer<T>,
+    ) -> Result<NodeIndex, AudioGraphError> {
+        if self.graph.node_count() >= self.graph.capacity().0 {
+            return Err("Graph node capacity exceeded");
+        }
+
+        let node_index = self.graph.add_node(ProcessorNode::new(processor));
+        let buffer_index = node_index.index();
+
+        if buffer_index >= self.buffers.len() {
+            return Err("Buffer capacity exceeded");
+        }
+
+        self.buffers[buffer_index] = Some(output_buffer);
+
+        self.topo_dirty = true; // TODO: only if connected?
+
+        Ok(node_index)
+    }
+
+    /// Connects two nodes in the graph with an edge
+    ///
+    /// The direction of the edge is so that the `to` node will access the output buffer of the `from` node
+    /// as its input buffer during processing. These nodes can be either processor nodes added via
+    /// [`RewireDspGraph::add_processor`], or the input or output nodes of the entire graph (see [`GraphNode`]).
     ///
     /// Optionally, a [`ChannelLayout`] can be provided to specify which channels of the `from` node's output buffer
     /// should be processed by the `to` node. If no channel layout is provided, all channels are connected by default.
@@ -332,11 +673,11 @@ impl<T: Sample> DspGraph<T> {
     ///
     /// # Example
     /// ```rust
-    /// use audiograph::{DspGraph, FrameSize, GraphNode, MultiChannelBuffer, NoOp};
+    /// use audiograph::{RewireDspGraph, FrameSize, GraphNode, MultiChannelBuffer, NoOp};
     ///
     /// let frame_size = FrameSize(1024);
     ///
-    /// let mut dsp_graph = DspGraph::<f32>::new(4, frame_size, None);
+    /// let mut dsp_graph = RewireDspGraph::<f32>::new(4, frame_size, None);
     ///
     /// let node1 = dsp_graph
     ///     .add_processor(
@@ -415,7 +756,7 @@ impl<T: Sample> DspGraph<T> {
     ///
     /// **NOT realtime-safe**
     ///
-    /// See [`DspGraph::connect`] and [`DspGraph::rewire`] for details.
+    /// See [`RewireDspGraph::connect`] and [`RewireDspGraph::rewire`] for details.
     pub fn connect_rewired(
         &mut self,
         from: GraphNode,
