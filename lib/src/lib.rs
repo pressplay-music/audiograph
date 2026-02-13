@@ -210,13 +210,6 @@ type GraphVisitMap<T, E> = <StableDiGraph<ProcessorNode<T>, E> as petgraph::visi
 /// - [`RewireDspGraph`]: graph with channel rewiring capabilities
 ///
 /// Most users should use the type aliases rather than `DspGraph` directly:
-/// ```rust
-/// // For basic usage without rewiring
-/// let graph = BasicDspGraph::<f32>::new(2, FrameSize(512), None);
-///
-/// // For graphs that need channel rewiring
-/// let graph = RewireDspGraph::<f32>::new(2, FrameSize(512), None);
-/// ```
 ///
 /// Nodes and edges can be added using [`DspGraph::add_processor`] and [`DspGraph::connect`].
 /// Connections can also be dynamically enabled, disabled or updated.
