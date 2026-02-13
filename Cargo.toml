@@ -6,9 +6,10 @@ authors = ["Piotr Palka <coding@pressplay-music.com>"]
 description = "Realtime audio processing graph library"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/pressplay-music/audiograph"
-readme = "../README.md"
+readme = "README.md"
 keywords = ["audio", "dsp", "graph"]
 categories = ["multimedia::audio"]
+exclude = ["benches/", "examples/", ".github/"]
 
 [dependencies]
 bitvec = "1.0.1"
