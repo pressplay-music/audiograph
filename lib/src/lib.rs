@@ -51,7 +51,7 @@
 //!
 //! # Realtime safety
 //!
-//! Realtime safety is guaranteed for all [`DspGraph`] operations, including processing and modifying
+//! Realtime safety is guaranteed for all [`BasicDspGraph`] operations, including processing and modifying
 //! the graph structure. [`RewireDspGraph`] additionally supports channel rewiring, which is not
 //! realtime-safe and is documented as such.
 //!
@@ -391,6 +391,10 @@ impl<T: Sample, Edge: GraphEdge> DspGraph<T, Edge> {
     }
 
     /// Removes an existing connection from the graph
+    ///
+    /// **NOT realtime safe for the [`RewireDspGraph`] variant**
+    ///
+    /// Alternative: Use [`DspGraph::disable_connection`] to temporarily disable a connection.
     pub fn remove_connection(&mut self, edge: EdgeIndex) -> Result<(), AudioGraphError> {
         self.graph.remove_edge(edge).ok_or("Edge not found")?;
         self.topo_dirty = true;
@@ -598,8 +602,54 @@ impl<T: Sample, Edge: GraphEdge> DspGraph<T, Edge> {
 #[allow(private_bounds)]
 impl<T: Sample> RewireDspGraph<T> {
     /// Rewires an existing connection in the graph to use a different channel mapping
+    /// between the edge's source and destination nodes.
     ///
     /// **NOT realtime safe**
+    ///
+    /// The `rewire_mapping` parameter is a slice of tuples where each tuple defines a channel mapping
+    /// in the form `(source_channel, destination_channel)`.
+    ///
+    /// Note: Mapping multiple source channels to the same destination channel returns an error.
+    ///
+    /// # Example
+    /// ```rust
+    /// use audiograph::{FrameSize, GraphNode, MultiChannelBuffer, NoOp, RewireDspGraph};
+    ///
+    /// let frame_size = FrameSize(1024);
+    ///
+    /// let mut dsp_graph = RewireDspGraph::<f32>::new(4, frame_size, None);
+    ///
+    /// let node1 = dsp_graph
+    ///     .add_processor(
+    ///         NoOp {},
+    ///         MultiChannelBuffer::new(4, frame_size), // 4 output channels
+    ///     )
+    ///     .unwrap();
+    ///
+    /// let node2 = dsp_graph
+    ///     .add_processor(
+    ///         NoOp {},
+    ///         MultiChannelBuffer::new(4, frame_size), // 4 output channels
+    ///     )
+    ///     .unwrap();
+    ///
+    /// // Connect nodes with default channel layout (i.e., all channels in order)
+    /// dsp_graph
+    ///     .connect(GraphNode::Input, node1.into(), None)
+    ///     .unwrap();
+    ///
+    /// let edge = dsp_graph.connect(node1.into(), node2.into(), None).unwrap();
+    ///
+    /// dsp_graph
+    ///     .connect(node2.into(), GraphNode::Output, None)
+    ///     .unwrap();
+    ///
+    /// // Rewire the edge to swap channels 0 and 1, while keeping channels 2 and 3 the same
+    /// dsp_graph
+    ///     .rewire(edge, &[(0, 1), (1, 0), (2, 2), (3, 3)])
+    ///     .unwrap();
+    /// ```
+    ///
     pub fn rewire(
         &mut self,
         edge_index: EdgeIndex,
@@ -630,6 +680,8 @@ impl<T: Sample> RewireDspGraph<T> {
     /// Removes rewiring from an existing connection
     ///
     /// **NOT realtime-safe**
+    ///
+    /// TODO: a valid channel layout is not established after removal!
     pub fn remove_rewire(&mut self, edge_index: EdgeIndex) -> Result<(), AudioGraphError> {
         if let Some(edge) = self.graph.edge_weight_mut(edge_index) {
             edge.rewire = None;
@@ -642,6 +694,8 @@ impl<T: Sample> RewireDspGraph<T> {
     /// Connects two nodes and creates a rewired mapping in one step
     ///
     /// **NOT realtime-safe**
+    ///
+    /// See [`RewireDspGraph::connect`] and [`RewireDspGraph::rewire`] for details.
     pub fn connect_rewired(
         &mut self,
         from: GraphNode,
