@@ -76,7 +76,7 @@ dependencies = [
 
 [[package]]
 name = "audiograph"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bitvec",
  "num",
@@ -85,7 +85,7 @@ dependencies = [
 
 [[package]]
 name = "audiograph-examples"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "audiograph",
  "clap",
