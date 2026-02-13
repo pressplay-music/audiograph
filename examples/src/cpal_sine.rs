@@ -1,5 +1,5 @@
 use audiograph::{
-    DspGraph, GraphNode,
+    BasicDspGraph, GraphNode,
     buffer::{AudioBuffer, FrameSize, MultiChannelBuffer},
 };
 use clap::Parser;
@@ -52,7 +52,7 @@ fn main() {
 
     // -- CREATE GRAPH AND ADD NODES -- //
 
-    let mut dsp_graph = DspGraph::<f32>::new(channels, frame_size, Some(8));
+    let mut dsp_graph = BasicDspGraph::<f32>::new(channels, frame_size, Some(8));
 
     let sine_node = dsp_graph
         .add_processor(

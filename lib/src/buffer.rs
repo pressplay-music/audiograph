@@ -95,7 +95,7 @@ impl<T: Sample> AudioBuffer<T> for MultiChannelBuffer<T> {
 ///
 /// Useful for zero-copy processing of immutable (input) audio data. Example:
 /// fn channel_based_callback<'a>(data: &[&[f32]]) {
-///     let buffer_view = MultiChannelBufferView::new(data, FrameSize(data[0].len()));
+///     let buffer_view = MultiChannelBufferView::new(data, FrameSize(data\[0\].len()));
 /// }
 pub struct MultiChannelBufferView<'a, T: Sample> {
     channels: &'a [&'a [T]],
@@ -135,7 +135,7 @@ impl<T: Sample> AudioBuffer<T> for MultiChannelBufferView<'_, T> {
 ///
 /// Useful for zero-copy processing of mutable (output) audio data. Example:
 /// fn channel_based_callback<'a>(data: &'a mut [&'a mut [f32]]) {
-///     let mut mutable_buffer_view = MultiChannelBufferViewMut::new(data, FrameSize(data[0].len()));
+///     let mut mutable_buffer_view = MultiChannelBufferViewMut::new(data, FrameSize(data\[0\].len()));
 /// }
 pub struct MultiChannelBufferViewMut<'a, T: Sample> {
     channels: &'a mut [&'a mut [T]],
