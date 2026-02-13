@@ -37,7 +37,7 @@ pub fn create_diamond_graph(
     layers: usize,
     buffer_size: usize,
     use_empty: bool,
-) -> (audiograph::DspGraph<f32>, usize) {
+) -> (audiograph::BasicDspGraph<f32>, usize) {
     use audiograph::*;
 
     assert!(layers % 2 == 1, "Layers must be odd");
