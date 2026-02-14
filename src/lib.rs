@@ -35,8 +35,11 @@
 //! - [`DspGraph::add_processor`]: Adds a new processor node to the graph along with its associated output buffer.
 //! - [`DspGraph::connect`]: Connects two nodes in the graph with an edge, optionally specifying a channel layout.
 //!
-//! Additional methods are provided for more advanced operations, such as rewiring connections, enabling and
+//! Additional methods are provided for more advanced operations, such as enabling and
 //! disabling edges and removing connections.
+//!
+//! For channel rewiring support, see [`RewireDspGraph`], which extends the base graph with
+//! the ability to remap channels on existing connections.
 //!
 //! Graph nodes and edges are identified using the `NodeIndex` and `EdgeIndex` types from the `petgraph` crate,
 //! which provides the underlying directed graph implementation.
@@ -48,9 +51,9 @@
 //!
 //! # Realtime safety
 //!
-//! Realtime safety is guaranteed for most graph operations, including processing and modifying
-//! the graph structure. Some operations, such as rewiring connections, are not realtime-safe and
-//! are documented as such.
+//! Realtime safety is guaranteed for all [`BasicDspGraph`] operations, including processing and modifying
+//! the graph structure. [`RewireDspGraph`] additionally supports channel rewiring, which is not
+//! realtime-safe and is documented as such.
 //!
 //! Adding a node to the graph requires the node's audio buffer to be allocated. It is the caller's
 //! responsibility to ensure this allocation is performed safely and not on the high-priority audio thread.
@@ -113,33 +116,88 @@ impl<T: Sample> ProcessorNode<T> {
     }
 }
 
-/// Represents an edge between two processor nodes in the audio graph
-///
-/// Contains information about channel layout, rewiring of channels, and whether the connection is enabled
-/// or disabled.
 #[derive(Clone)]
-struct ProcessorChannel {
+#[doc(hidden)]
+pub struct EdgeData {
     pub channel_layout: Option<ChannelLayout>,
-    pub has_rewire: bool,
     pub enabled: bool,
 }
 
-impl ProcessorChannel {
-    pub fn new(channel_layout: Option<ChannelLayout>) -> Self {
-        Self {
-            channel_layout,
-            has_rewire: false,
-            enabled: true,
-        }
-    }
+/// Common interface for graph edge types
+#[doc(hidden)]
+pub trait GraphEdge: Clone {
+    const SUPPORTS_REWIRE: bool; // for compile-time differentiation between edge types
 
-    pub fn get_layout(&self) -> Option<ChannelLayout> {
-        self.channel_layout.clone()
+    fn new(channel_layout: Option<ChannelLayout>) -> Self;
+    fn data(&self) -> &EdgeData;
+    fn data_mut(&mut self) -> &mut EdgeData;
+
+    fn get_rewire(&self) -> Option<&HashMap<usize, usize>> {
+        None
     }
 }
 
-type GraphVisitMap<T> =
-    <StableDiGraph<ProcessorNode<T>, ProcessorChannel> as petgraph::visit::Visitable>::Map;
+#[derive(Clone)]
+#[doc(hidden)]
+pub struct ProcessorChannel {
+    pub data: EdgeData,
+}
+
+impl GraphEdge for ProcessorChannel {
+    const SUPPORTS_REWIRE: bool = false;
+
+    fn new(channel_layout: Option<ChannelLayout>) -> Self {
+        Self {
+            data: EdgeData {
+                channel_layout,
+                enabled: true,
+            },
+        }
+    }
+
+    fn data(&self) -> &EdgeData {
+        &self.data
+    }
+
+    fn data_mut(&mut self) -> &mut EdgeData {
+        &mut self.data
+    }
+}
+
+#[derive(Clone)]
+#[doc(hidden)]
+pub struct RewireProcessorChannel {
+    pub data: EdgeData,
+    pub rewire: Option<HashMap<usize, usize>>,
+}
+
+impl GraphEdge for RewireProcessorChannel {
+    const SUPPORTS_REWIRE: bool = true;
+
+    fn new(channel_layout: Option<ChannelLayout>) -> Self {
+        Self {
+            data: EdgeData {
+                channel_layout,
+                enabled: true,
+            },
+            rewire: None,
+        }
+    }
+
+    fn data(&self) -> &EdgeData {
+        &self.data
+    }
+
+    fn data_mut(&mut self) -> &mut EdgeData {
+        &mut self.data
+    }
+
+    fn get_rewire(&self) -> Option<&HashMap<usize, usize>> {
+        self.rewire.as_ref()
+    }
+}
+
+type GraphVisitMap<T, E> = <StableDiGraph<ProcessorNode<T>, E> as petgraph::visit::Visitable>::Map;
 
 /// Directed graph structure for audio processing
 ///
@@ -147,27 +205,33 @@ type GraphVisitMap<T> =
 /// When constructing a [`DspGraph`], a capacity needs to be provided to preallocate internal data
 /// structures. This ensures realtime safety when adding nodes and edges at runtime.
 ///
-/// Nodes and edges can be added using the [`DspGraph::add_processor`] and [`DspGraph::connect`] methods.
-/// Connections can also be dynamically enabled, disabled or updated. Additionally, it is possible to
-/// rewire the channels of an existing connection, though this operation is not realtime-safe.
+/// Two graph variants are provided by the library, differentiated by their edge types:
+/// - [`BasicDspGraph`]: lightweight graph without rewiring support
+/// - [`RewireDspGraph`]: graph with channel rewiring capabilities
+///
+/// Most users should use the type aliases rather than `DspGraph` directly:
+///
+/// Nodes and edges can be added using [`DspGraph::add_processor`] and [`DspGraph::connect`].
+/// Connections can also be dynamically enabled, disabled or updated.
 ///
 /// The graph owns the processing nodes as well as their corresponding output buffers. Conversely,
 /// the input and output buffers that the graph operates on must be managed outside of the graph structure.
 /// To run the audio processing graph, use the [`DspGraph::process`] method, which takes the input
 /// and output buffers as arguments.
-pub struct DspGraph<T: Sample> {
-    graph: StableDiGraph<ProcessorNode<T>, ProcessorChannel>,
+#[allow(private_bounds)]
+pub struct DspGraph<T: Sample, Edge: GraphEdge> {
+    graph: StableDiGraph<ProcessorNode<T>, Edge>,
     topo_order: Vec<NodeIndex>, // Pre-allocated processing order vector
     buffers: Vec<Option<MultiChannelBuffer<T>>>,
     input_node: NodeIndex,
     output_node: NodeIndex,
     summing_buffer: MultiChannelBuffer<T>,
-    dfs_visitor: DfsPostOrder<NodeIndex, GraphVisitMap<T>>,
+    dfs_visitor: DfsPostOrder<NodeIndex, GraphVisitMap<T, Edge>>,
     topo_dirty: bool,
-    edge_rewires: HashMap<EdgeIndex, HashMap<usize, usize>>,
 }
 
-impl<T: Sample> DspGraph<T> {
+#[allow(private_bounds)]
+impl<T: Sample, Edge: GraphEdge> DspGraph<T, Edge> {
     /// Creates a new [`DspGraph`] with preallocated capacity for internal data structures
     ///
     /// - `num_channels`: Maximum number of channels a node will process. Needs to be known upfront for
@@ -192,7 +256,6 @@ impl<T: Sample> DspGraph<T> {
             summing_buffer: MultiChannelBuffer::new(num_channels, frame_size),
             dfs_visitor: DfsPostOrder::default(),
             topo_dirty: true,
-            edge_rewires: HashMap::with_capacity(max_num_edges),
         };
 
         graph.input_node = graph
@@ -244,7 +307,7 @@ impl<T: Sample> DspGraph<T> {
     /// should be processed by the `to` node. If no channel layout is provided, all channels are connected by default.
     ///
     /// Returns the `EdgeIndex` of the newly created edge (or an error if something went wrong).
-    /// The edge index can be used to reference the edge for further operations such as rewiring or enabling/disabling
+    /// The edge index can be used to reference the edge for further operations such as enabling/disabling
     /// the connection.
     pub fn connect(
         &mut self,
@@ -306,7 +369,7 @@ impl<T: Sample> DspGraph<T> {
             }
         };
 
-        let edge = ProcessorChannel::new(channel_layout);
+        let edge = Edge::new(channel_layout);
 
         let edge_index = match self.graph.find_edge(from_index, to_index) {
             Some(existing_edge_index) => {
@@ -320,117 +383,12 @@ impl<T: Sample> DspGraph<T> {
         Ok(edge_index)
     }
 
-    /// Rewires an existing connection in the graph to use a different channel mapping
-    /// between the edge's source and destination nodes.
-    ///
-    /// **NOT realtime safe**
-    ///
-    /// The `rewire_mapping` parameter is a slice of tuples where each tuple defines a channel mapping
-    /// in the form `(source_channel, destination_channel)`.
-    ///
-    /// Note: Mapping multiple source channels to the same destination channel returns an error.
-    ///
-    /// # Example
-    /// ```rust
-    /// use audiograph::{DspGraph, FrameSize, GraphNode, MultiChannelBuffer, NoOp};
-    ///
-    /// let frame_size = FrameSize(1024);
-    ///
-    /// let mut dsp_graph = DspGraph::<f32>::new(4, frame_size, None);
-    ///
-    /// let node1 = dsp_graph
-    ///     .add_processor(
-    ///         NoOp {},
-    ///         MultiChannelBuffer::new(4, frame_size), // 4 output channels
-    ///     )
-    ///     .unwrap();
-    ///
-    /// let node2 = dsp_graph
-    ///     .add_processor(
-    ///         NoOp {},
-    ///         MultiChannelBuffer::new(4, frame_size), // 4 output channels
-    ///     )
-    ///     .unwrap();
-    ///
-    /// // Connect nodes with default channel layout (i.e., all channels in order)
-    /// dsp_graph
-    ///     .connect(GraphNode::Input, node1.into(), None)
-    ///     .unwrap();
-    ///
-    /// let edge = dsp_graph.connect(node1.into(), node2.into(), None).unwrap();
-    ///
-    /// dsp_graph
-    ///     .connect(node2.into(), GraphNode::Output, None)
-    ///     .unwrap();
-    ///
-    /// // Rewire the edge to swap channels 0 and 1, while keeping channels 2 and 3 the same
-    /// dsp_graph
-    ///     .rewire(edge, &[(0, 1), (1, 0), (2, 2), (3, 3)])
-    ///     .unwrap();
-    /// ```
-    ///
-    pub fn rewire(
-        &mut self,
-        edge_index: EdgeIndex,
-        rewire_mapping: &[(usize, usize)], // maps source channel to destination channel
-    ) -> Result<(), AudioGraphError> {
-        if let Some(edge) = self.graph.edge_weight_mut(edge_index) {
-            edge.has_rewire = true;
-
-            let mut channel_layout = ChannelLayout::new(0);
-            let rewire = self.edge_rewires.entry(edge_index).or_default();
-            rewire.clear();
-
-            for &(source, dest) in rewire_mapping {
-                channel_layout.connect(dest);
-
-                // we flip (source, dest) to have logical to physical mapping
-                if rewire.insert(dest, source).is_some() {
-                    return Err("Duplicate destination channel in rewire mapping");
-                }
-            }
-
-            edge.channel_layout = Some(channel_layout);
-
-            Ok(())
-        } else {
-            Err("Edge not found")
-        }
-    }
-
-    /// **NOT realtime-safe**
-    ///
-    /// TODO: a valid channel layout is not established after removal!
-    pub fn remove_rewire(&mut self, edge_index: EdgeIndex) -> Result<(), AudioGraphError> {
-        if let Some(edge) = self.graph.edge_weight_mut(edge_index) {
-            edge.has_rewire = false;
-            self.edge_rewires.remove(&edge_index);
-            Ok(())
-        } else {
-            Err("Edge not found")
-        }
-    }
-
-    /// Connects two nodes and creates a rewired mapping in one step
-    ///
-    /// **NOT realtime-safe**
-    ///
-    /// See [`DspGraph::connect`] and [`DspGraph::rewire`] for details.
-    pub fn connect_rewired(
-        &mut self,
-        from: GraphNode,
-        to: GraphNode,
-        wiring: &[(usize, usize)],
-    ) -> Result<EdgeIndex, AudioGraphError> {
-        let edge = self.connect(from, to, None)?;
-        self.rewire(edge, wiring)?;
-
-        Ok(edge)
-    }
-
     /// Removes an existing connection from the graph
+    ///
+    /// **NOT realtime safe for the [`RewireDspGraph`] variant**
+    ///
+    /// Alternative: Use [`DspGraph::disable_connection`] to temporarily disable a connection.
     pub fn remove_connection(&mut self, edge: EdgeIndex) -> Result<(), AudioGraphError> {
-        // Note: Rewire information (if any) is deliberately leaked for RT-safety
         self.graph.remove_edge(edge).ok_or("Edge not found")?;
         self.topo_dirty = true;
         Ok(())
@@ -439,7 +397,7 @@ impl<T: Sample> DspGraph<T> {
     /// Enables an existing connection in the graph
     pub fn enable_connection(&mut self, edge: EdgeIndex) -> Result<(), AudioGraphError> {
         if let Some(edge_weight) = self.graph.edge_weight_mut(edge) {
-            edge_weight.enabled = true;
+            edge_weight.data_mut().enabled = true;
             Ok(())
         } else {
             Err("Edge not found")
@@ -449,7 +407,7 @@ impl<T: Sample> DspGraph<T> {
     /// Disables an existing connection in the graph
     pub fn disable_connection(&mut self, edge: EdgeIndex) -> Result<(), AudioGraphError> {
         if let Some(edge_weight) = self.graph.edge_weight_mut(edge) {
-            edge_weight.enabled = false;
+            edge_weight.data_mut().enabled = false;
             Ok(())
         } else {
             Err("Edge not found")
@@ -497,7 +455,7 @@ impl<T: Sample> DspGraph<T> {
             let mut incoming_edges = self
                 .graph
                 .edges_directed(node_index, Direction::Incoming)
-                .filter(|edge| edge.weight().enabled);
+                .filter(|edge| edge.weight().data().enabled);
 
             let num_incoming_edges = incoming_edges.clone().count();
 
@@ -515,10 +473,10 @@ impl<T: Sample> DspGraph<T> {
                         self.buffers[input_buffer_index].as_ref().unwrap()
                     };
 
-                    let edge_layout = edge.weight().get_layout();
+                    let edge_layout = edge.weight().data().channel_layout.clone();
 
-                    if edge.weight().has_rewire {
-                        if let Some(rewire) = self.edge_rewires.get(&edge.id()) {
+                    if Edge::SUPPORTS_REWIRE {
+                        if let Some(rewire) = edge.weight().get_rewire() {
                             let rewired_buffer_view = RewiredBufferView {
                                 buffer: input_buffer,
                                 rewire,
@@ -553,13 +511,17 @@ impl<T: Sample> DspGraph<T> {
 
                 processor_node.process(&mut context);
             } else if num_incoming_edges == 1 {
-                let (input_node, channel_layout, has_rewire, edge_id) = {
+                let (input_node, channel_layout, rewire_map) = {
                     let edge = incoming_edges.next().unwrap();
+                    let rewire = if Edge::SUPPORTS_REWIRE {
+                        edge.weight().get_rewire().cloned()
+                    } else {
+                        None
+                    };
                     (
                         edge.source(),
-                        edge.weight().get_layout(),
-                        edge.weight().has_rewire,
-                        edge.id(),
+                        edge.weight().data().channel_layout.clone(),
+                        rewire,
                     )
                 };
 
@@ -578,18 +540,28 @@ impl<T: Sample> DspGraph<T> {
 
                 let processor_node = self.graph.node_weight_mut(node_index).unwrap();
 
-                if has_rewire {
-                    let rewired_buffer_view = RewiredBufferView {
-                        buffer: input_buffer,
-                        rewire: self.edge_rewires.get(&edge_id).unwrap(),
-                    };
-                    let mut context = ProcessingContext::create_unchecked(
-                        &rewired_buffer_view,
-                        output_buffer,
-                        channel_layout,
-                        num_frames,
-                    );
-                    processor_node.process(&mut context);
+                if Edge::SUPPORTS_REWIRE {
+                    if let Some(rewire) = &rewire_map {
+                        let rewired_buffer_view = RewiredBufferView {
+                            buffer: input_buffer,
+                            rewire,
+                        };
+                        let mut context = ProcessingContext::create_unchecked(
+                            &rewired_buffer_view,
+                            output_buffer,
+                            channel_layout,
+                            num_frames,
+                        );
+                        processor_node.process(&mut context);
+                    } else {
+                        let mut context = ProcessingContext::create_unchecked(
+                            input_buffer,
+                            output_buffer,
+                            channel_layout,
+                            num_frames,
+                        );
+                        processor_node.process(&mut context);
+                    }
                 } else {
                     let mut context = ProcessingContext::create_unchecked(
                         input_buffer,
@@ -605,7 +577,7 @@ impl<T: Sample> DspGraph<T> {
         for edge in self
             .graph
             .edges_directed(self.output_node, Direction::Incoming)
-            .filter(|e| e.weight().enabled)
+            .filter(|e| e.weight().data().enabled)
         {
             let node = edge.source();
             let node_buffer: &dyn AudioBuffer<T> = if node == self.input_node {
@@ -615,10 +587,127 @@ impl<T: Sample> DspGraph<T> {
                 self.buffers[input_buffer_index].as_ref().unwrap()
             };
             // TODO: handle disconnected channels
-            output.add(node_buffer, &edge.weight().get_layout());
+            output.add(node_buffer, &edge.weight().data().channel_layout.clone());
         }
     }
 }
+
+#[allow(private_bounds)]
+impl<T: Sample> RewireDspGraph<T> {
+    /// Rewires an existing connection in the graph to use a different channel mapping
+    /// between the edge's source and destination nodes.
+    ///
+    /// **NOT realtime safe**
+    ///
+    /// The `rewire_mapping` parameter is a slice of tuples where each tuple defines a channel mapping
+    /// in the form `(source_channel, destination_channel)`.
+    ///
+    /// Note: Mapping multiple source channels to the same destination channel returns an error.
+    ///
+    /// # Example
+    /// ```rust
+    /// use audiograph::{FrameSize, GraphNode, MultiChannelBuffer, NoOp, RewireDspGraph};
+    ///
+    /// let frame_size = FrameSize(1024);
+    ///
+    /// let mut dsp_graph = RewireDspGraph::<f32>::new(4, frame_size, None);
+    ///
+    /// let node1 = dsp_graph
+    ///     .add_processor(
+    ///         NoOp {},
+    ///         MultiChannelBuffer::new(4, frame_size), // 4 output channels
+    ///     )
+    ///     .unwrap();
+    ///
+    /// let node2 = dsp_graph
+    ///     .add_processor(
+    ///         NoOp {},
+    ///         MultiChannelBuffer::new(4, frame_size), // 4 output channels
+    ///     )
+    ///     .unwrap();
+    ///
+    /// // Connect nodes with default channel layout (i.e., all channels in order)
+    /// dsp_graph
+    ///     .connect(GraphNode::Input, node1.into(), None)
+    ///     .unwrap();
+    ///
+    /// let edge = dsp_graph.connect(node1.into(), node2.into(), None).unwrap();
+    ///
+    /// dsp_graph
+    ///     .connect(node2.into(), GraphNode::Output, None)
+    ///     .unwrap();
+    ///
+    /// // Rewire the edge to swap channels 0 and 1, while keeping channels 2 and 3 the same
+    /// dsp_graph
+    ///     .rewire(edge, &[(0, 1), (1, 0), (2, 2), (3, 3)])
+    ///     .unwrap();
+    /// ```
+    ///
+    pub fn rewire(
+        &mut self,
+        edge_index: EdgeIndex,
+        rewire_mapping: &[(usize, usize)], // maps source channel to destination channel
+    ) -> Result<(), AudioGraphError> {
+        if let Some(edge) = self.graph.edge_weight_mut(edge_index) {
+            let mut channel_layout = ChannelLayout::new(0);
+            let mut rewire = HashMap::new();
+
+            for &(source, dest) in rewire_mapping {
+                channel_layout.connect(dest);
+
+                // we flip (source, dest) to have logical to physical mapping
+                if rewire.insert(dest, source).is_some() {
+                    return Err("Duplicate destination channel in rewire mapping");
+                }
+            }
+
+            edge.data_mut().channel_layout = Some(channel_layout);
+            edge.rewire = Some(rewire);
+
+            Ok(())
+        } else {
+            Err("Edge not found")
+        }
+    }
+
+    /// Removes rewiring from an existing connection
+    ///
+    /// **NOT realtime-safe**
+    ///
+    /// TODO: a valid channel layout is not established after removal!
+    pub fn remove_rewire(&mut self, edge_index: EdgeIndex) -> Result<(), AudioGraphError> {
+        if let Some(edge) = self.graph.edge_weight_mut(edge_index) {
+            edge.rewire = None;
+            Ok(())
+        } else {
+            Err("Edge not found")
+        }
+    }
+
+    /// Connects two nodes and creates a rewired mapping in one step
+    ///
+    /// **NOT realtime-safe**
+    ///
+    /// See [`RewireDspGraph::connect`] and [`RewireDspGraph::rewire`] for details.
+    pub fn connect_rewired(
+        &mut self,
+        from: GraphNode,
+        to: GraphNode,
+        wiring: &[(usize, usize)],
+    ) -> Result<EdgeIndex, AudioGraphError> {
+        let edge = self.connect(from, to, None)?;
+        self.rewire(edge, wiring)?;
+        Ok(edge)
+    }
+}
+
+/// Type alias for a basic graph without rewiring support
+#[allow(private_interfaces)]
+pub type BasicDspGraph<T> = DspGraph<T, ProcessorChannel>;
+
+/// Type alias for a graph with rewiring support
+#[allow(private_interfaces)]
+pub type RewireDspGraph<T> = DspGraph<T, RewireProcessorChannel>;
 
 #[cfg(test)]
 mod tests {
@@ -642,7 +731,7 @@ mod tests {
 
     #[test]
     fn test_simple_graph() {
-        let mut graph = DspGraph::<f32>::new(1, FrameSize(10), None);
+        let mut graph = BasicDspGraph::<f32>::new(1, FrameSize(10), None);
         let fourty_two = graph
             .add_processor(FourtyTwo {}, MultiChannelBuffer::new(1, FrameSize(10)))
             .unwrap();
@@ -664,7 +753,7 @@ mod tests {
 
     #[test]
     fn test_passthrough() {
-        let mut graph = DspGraph::<f32>::new(1, FrameSize(10), None);
+        let mut graph = BasicDspGraph::<f32>::new(1, FrameSize(10), None);
         graph
             .connect(GraphNode::Input, GraphNode::Output, None)
             .unwrap();
@@ -681,7 +770,7 @@ mod tests {
 
     #[test]
     fn test_sum_at_output() {
-        let mut graph = DspGraph::<f32>::new(1, FrameSize(10), None);
+        let mut graph = BasicDspGraph::<f32>::new(1, FrameSize(10), None);
         graph
             .connect(GraphNode::Input, GraphNode::Output, None)
             .unwrap();
@@ -708,7 +797,7 @@ mod tests {
 
     #[test]
     fn test_partial_channel_routing() {
-        let mut graph = DspGraph::<f32>::new(3, FrameSize(10), None);
+        let mut graph = BasicDspGraph::<f32>::new(3, FrameSize(10), None);
         let fourty_two = graph
             .add_processor(FourtyTwo {}, MultiChannelBuffer::new(3, FrameSize(10)))
             .unwrap();
@@ -775,7 +864,7 @@ mod tests {
             }
         }
 
-        let mut graph = DspGraph::<f32>::new(1, FrameSize(8), None);
+        let mut graph = BasicDspGraph::<f32>::new(1, FrameSize(8), None);
 
         let add1 = graph
             .add_processor(
@@ -817,7 +906,7 @@ mod tests {
     fn test_reconnect() {
         let frame_size = FrameSize(10);
 
-        let mut graph = DspGraph::<f32>::new(2, frame_size, Some(16));
+        let mut graph = BasicDspGraph::<f32>::new(2, frame_size, Some(16));
 
         let node_a = graph
             .add_processor(PassThrough {}, MultiChannelBuffer::new(2, frame_size))
@@ -893,7 +982,7 @@ mod tests {
 
     #[test]
     fn test_capacity_limits() {
-        let mut graph = DspGraph::<f32>::new(1, FrameSize(10), Some(4));
+        let mut graph = BasicDspGraph::<f32>::new(1, FrameSize(10), Some(4));
 
         // Capacity is 4, input and output are already created (2 nodes), so we can add 2 more
         let n1 = graph
@@ -921,7 +1010,7 @@ mod tests {
     #[test]
     fn test_enable_disable_connection() {
         let frame_size = FrameSize(10);
-        let mut graph = DspGraph::<f32>::new(1, frame_size, None);
+        let mut graph = BasicDspGraph::<f32>::new(1, frame_size, None);
 
         let node = graph
             .add_processor(FourtyTwo {}, MultiChannelBuffer::new(1, frame_size))
