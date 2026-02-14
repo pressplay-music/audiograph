@@ -9,7 +9,7 @@ repository = "https://github.com/pressplay-music/audiograph"
 readme = "README.md"
 keywords = ["audio", "dsp", "graph"]
 categories = ["multimedia::audio"]
-exclude = ["benches/", "examples/", ".github/"]
+include = ["src/**", "Cargo.toml", "build.rs", "README.md", "LICENSE*"]
 
 [dependencies]
 bitvec = "1.0.1"
