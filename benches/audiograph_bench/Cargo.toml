@@ -17,4 +17,4 @@ path = "src/profile.rs"
 
 [dependencies]
 criterion = "0.7.0"
-audiograph = { path = "../.." }
+pp-audiograph = { path = "../.." }

@@ -9,6 +9,12 @@ Audiograph provides abstractions for audio processors, audio buffers and channel
 
 Audiograph supports modifying DSP graphs at runtime under real-time constraints, including adding or removing processor nodes, and changing connections between nodes.
 
+## Installation
+
+```bash
+cargo add pp-audiograph
+```
+
 ## Basic Usage
 
 The most basic functionality is shown below. For more advanced usage, refer to the documentation.
