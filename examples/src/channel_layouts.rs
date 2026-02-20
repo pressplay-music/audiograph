@@ -1,7 +1,7 @@
 use audiograph::{
     GraphNode, RewireDspGraph,
     buffer::{AudioBuffer, FrameSize, MultiChannelBuffer},
-    channel::ChannelLayout,
+    channel::ChannelSelection,
 };
 use clap::Parser;
 
@@ -48,13 +48,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     dsp_graph.connect(
         GraphNode::Input,
         sine_node.into(),
-        Some(ChannelLayout::new(2)),
+        Some(ChannelSelection::new(2)),
     )?;
 
     dsp_graph.connect(
         sine_node.into(),
         left_gain_node.into(),
-        Some(ChannelLayout::new(1)), // first channel only (left)
+        Some(ChannelSelection::new(1)), // first channel only (left)
     )?;
 
     // Connect to right gain node and rewire the edge to use channel 1 instead of 0
@@ -63,13 +63,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     dsp_graph.connect(
         left_gain_node.into(),
         output_gain_node.into(),
-        Some(ChannelLayout::new(1)), // left gain node has only one output channel
+        Some(ChannelSelection::new(1)), // left gain node has only one output channel
     )?;
 
     let right_to_output_edge = dsp_graph.connect(
         right_gain_node.into(),
         output_gain_node.into(),
-        Some(ChannelLayout::new(1)),
+        Some(ChannelSelection::new(1)),
     )?;
 
     // Rewire existing connection: channel 0 of right node to channel 1 of output node (could use connect_rewired directly)
@@ -78,7 +78,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     dsp_graph.connect(
         output_gain_node.into(),
         GraphNode::Output,
-        Some(ChannelLayout::new(2)),
+        Some(ChannelSelection::new(2)),
     )?;
 
     let input_buffer = MultiChannelBuffer::<f32>::new(2, frame_size);

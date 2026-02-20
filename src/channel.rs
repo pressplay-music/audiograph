@@ -3,22 +3,22 @@ use bitvec::{array::BitArray, slice::IterOnes};
 include!(concat!(env!("OUT_DIR"), "/constants.rs"));
 
 const WORDS: usize = (MAX_CHANNELS - 1) / 64 + 1;
-pub type ChannelLayout = ChannelLayoutImpl<MAX_CHANNELS, WORDS>;
+pub type ChannelSelection = ChannelSelectionImpl<MAX_CHANNELS, WORDS>;
 
 #[derive(Clone)]
-pub struct ChannelLayoutImpl<const NUM_CHANNELS: usize, const WORDS: usize> {
+pub struct ChannelSelectionImpl<const NUM_CHANNELS: usize, const WORDS: usize> {
     bits: BitArray<[u64; WORDS]>,
 }
 
 impl<const NUM_CHANNELS: usize, const WORDS: usize> Default
-    for ChannelLayoutImpl<NUM_CHANNELS, WORDS>
+    for ChannelSelectionImpl<NUM_CHANNELS, WORDS>
 {
     fn default() -> Self {
         Self::new(NUM_CHANNELS)
     }
 }
 
-impl<const NUM_CHANNELS: usize, const WORDS: usize> ChannelLayoutImpl<NUM_CHANNELS, WORDS> {
+impl<const NUM_CHANNELS: usize, const WORDS: usize> ChannelSelectionImpl<NUM_CHANNELS, WORDS> {
     pub fn new(num_connected: usize) -> Self {
         let mut bits = BitArray::ZERO;
         let count = num_connected.min(NUM_CHANNELS);
@@ -27,11 +27,11 @@ impl<const NUM_CHANNELS: usize, const WORDS: usize> ChannelLayoutImpl<NUM_CHANNE
     }
 
     pub fn from_indices(indices: &[usize]) -> Self {
-        let mut layout = ChannelLayoutImpl::new(0);
+        let mut selection = ChannelSelectionImpl::new(0);
         for &index in indices {
-            layout.connect(index);
+            selection.connect(index);
         }
-        layout
+        selection
     }
 
     // TODO: return Result
@@ -71,24 +71,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_channel_layout_creation() {
-        let layout = ChannelLayout::new(3);
-        assert!(layout.is_connected(0));
-        assert!(layout.is_connected(1));
-        assert!(layout.is_connected(2));
-        assert!(!layout.is_connected(3));
-        assert!(!layout.is_connected(63));
-        assert!(!layout.is_connected(64));
+    fn test_channel_selection_creation() {
+        let selection = ChannelSelection::new(3);
+        assert!(selection.is_connected(0));
+        assert!(selection.is_connected(1));
+        assert!(selection.is_connected(2));
+        assert!(!selection.is_connected(3));
+        assert!(!selection.is_connected(63));
+        assert!(!selection.is_connected(64));
     }
 
     #[test]
-    fn test_channel_layout_clamping() {
-        let mut layout = ChannelLayout::new(5);
-        layout.clamp(3);
-        assert!(layout.is_connected(0));
-        assert!(layout.is_connected(1));
-        assert!(layout.is_connected(2));
-        assert!(!layout.is_connected(3));
-        assert!(!layout.is_connected(4));
+    fn test_channel_selection_clamping() {
+        let mut selection = ChannelSelection::new(5);
+        selection.clamp(3);
+        assert!(selection.is_connected(0));
+        assert!(selection.is_connected(1));
+        assert!(selection.is_connected(2));
+        assert!(!selection.is_connected(3));
+        assert!(!selection.is_connected(4));
     }
 }
