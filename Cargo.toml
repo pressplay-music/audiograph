@@ -1,6 +1,6 @@
 [package]
-name = "audiograph"
-version = "0.2.0"
+name = "pp-audiograph"
+version = "0.1.0"
 edition = "2024"
 authors = ["Piotr Palka <coding@pressplay-music.com>"]
 description = "Realtime audio processing graph library"
@@ -10,6 +10,10 @@ readme = "README.md"
 keywords = ["audio", "dsp", "graph"]
 categories = ["multimedia::audio"]
 include = ["src/**", "Cargo.toml", "build.rs", "README.md", "LICENSE*"]
+
+[lib]
+name = "audiograph"
+path = "src/lib.rs"
 
 [dependencies]
 bitvec = "1.0.1"

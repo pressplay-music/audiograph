@@ -13,6 +13,6 @@ name = "channel_layouts"
 path = "src/channel_layouts.rs"
 
 [dependencies]
-audiograph = { path = ".." }
+pp-audiograph = { path = ".." }
 clap = { version = "4.5.45", features = ["derive"] }
 cpal = "0.16.0"
