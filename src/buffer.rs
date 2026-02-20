@@ -1,4 +1,4 @@
-use crate::{channel::ChannelLayout, sample::Sample};
+use crate::{channel::ChannelSelection, sample::Sample};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,12 +41,12 @@ pub trait AudioBuffer<T: Sample> {
         }
     }
 
-    /// Sums channels from another buffer into this buffer, optionally using a channel layout to specify which channels to sum.
-    fn add(&mut self, other: &dyn AudioBuffer<T>, channel_layout: &Option<ChannelLayout>) {
-        if let Some(layout) = channel_layout {
-            let mut filtered_layout = layout.clone();
-            filtered_layout.clamp(self.num_channels().min(other.num_channels()));
-            for channel in filtered_layout.iter() {
+    /// Sums channels from another buffer into this buffer, optionally using a channel selection to specify which channels to sum.
+    fn add(&mut self, other: &dyn AudioBuffer<T>, channel_selection: &Option<ChannelSelection>) {
+        if let Some(selection) = channel_selection {
+            let mut filtered_selection = selection.clone();
+            filtered_selection.clamp(self.num_channels().min(other.num_channels()));
+            for channel in filtered_selection.iter() {
                 let src = other.channel(channel).unwrap();
                 let dst = self.channel_mut(channel).unwrap();
                 dst.iter_mut().zip(src.iter()).for_each(|(a, b)| {

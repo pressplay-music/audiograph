@@ -14,11 +14,11 @@
 //! - [`AudioBuffer`]: Trait representing a buffer of audio samples organized by channels. Multiple
 //!   implementations are provided, including [`MultiChannelBuffer`] (owning) and
 //!   [`MultiChannelBufferView`] (non-owning).
-//! - [`ChannelLayout`]: Struct describing the active channels of a connection between nodes. Graph edges
-//!   can carry an optional channel layout to indicate which channels of a node's output buffer are
+//! - [`ChannelSelection`]: Struct describing the active channels of a connection between nodes. Graph edges
+//!   can carry an optional channel selection to indicate which channels of a node's output buffer are
 //!   processed by connected successor nodes.
 //! - [`ProcessingContext`]: Struct providing context for audio processing, including input and output buffer
-//!   references, the channel layout, and the number of frames to process.
+//!   references, the channel selection, and the number of frames to process.
 //!
 //! # Graph structure
 //!
@@ -33,7 +33,7 @@
 //! A graph can be designed and modified using the provided API, most notably using the following construction
 //! methods:
 //! - [`DspGraph::add_processor`]: Adds a new processor node to the graph along with its associated output buffer.
-//! - [`DspGraph::connect`]: Connects two nodes in the graph with an edge, optionally specifying a channel layout.
+//! - [`DspGraph::connect`]: Connects two nodes in the graph with an edge, optionally specifying a channel selection.
 //!
 //! Additional methods are provided for more advanced operations, such as enabling and
 //! disabling edges and removing connections.
@@ -119,7 +119,7 @@ impl<T: Sample> ProcessorNode<T> {
 #[derive(Clone)]
 #[doc(hidden)]
 pub struct EdgeData {
-    pub channel_layout: Option<ChannelLayout>,
+    pub channel_selection: Option<ChannelSelection>,
     pub enabled: bool,
 }
 
@@ -128,7 +128,7 @@ pub struct EdgeData {
 pub trait GraphEdge: Clone {
     const SUPPORTS_REWIRE: bool; // for compile-time differentiation between edge types
 
-    fn new(channel_layout: Option<ChannelLayout>) -> Self;
+    fn new(channel_selection: Option<ChannelSelection>) -> Self;
     fn data(&self) -> &EdgeData;
     fn data_mut(&mut self) -> &mut EdgeData;
 
@@ -146,10 +146,10 @@ pub struct ProcessorChannel {
 impl GraphEdge for ProcessorChannel {
     const SUPPORTS_REWIRE: bool = false;
 
-    fn new(channel_layout: Option<ChannelLayout>) -> Self {
+    fn new(channel_selection: Option<ChannelSelection>) -> Self {
         Self {
             data: EdgeData {
-                channel_layout,
+                channel_selection: channel_selection,
                 enabled: true,
             },
         }
@@ -174,10 +174,10 @@ pub struct RewireProcessorChannel {
 impl GraphEdge for RewireProcessorChannel {
     const SUPPORTS_REWIRE: bool = true;
 
-    fn new(channel_layout: Option<ChannelLayout>) -> Self {
+    fn new(channel_selection: Option<ChannelSelection>) -> Self {
         Self {
             data: EdgeData {
-                channel_layout,
+                channel_selection: channel_selection,
                 enabled: true,
             },
             rewire: None,
@@ -303,8 +303,8 @@ impl<T: Sample, Edge: GraphEdge> DspGraph<T, Edge> {
     /// as its input buffer during processing. These nodes can be either processor nodes added via
     /// [`DspGraph::add_processor`], or the input or output nodes of the entire graph (see [`GraphNode`]).
     ///
-    /// Optionally, a [`ChannelLayout`] can be provided to specify which channels of the `from` node's output buffer
-    /// should be processed by the `to` node. If no channel layout is provided, all channels are connected by default.
+    /// Optionally, a [`ChannelSelection`] can be provided to specify which channels of the `from` node's output buffer
+    /// should be processed by the `to` node. If no selection is provided, all channels are connected by default.
     ///
     /// Returns the `EdgeIndex` of the newly created edge (or an error if something went wrong).
     /// The edge index can be used to reference the edge for further operations such as enabling/disabling
@@ -313,7 +313,7 @@ impl<T: Sample, Edge: GraphEdge> DspGraph<T, Edge> {
         &mut self,
         from: GraphNode,
         to: GraphNode,
-        channel_layout: Option<ChannelLayout>,
+        channel_selection: Option<ChannelSelection>,
     ) -> Result<EdgeIndex, AudioGraphError> {
         if self.graph.edge_count() >= self.graph.capacity().1 {
             return Err("Graph edge capacity exceeded");
@@ -345,17 +345,17 @@ impl<T: Sample, Edge: GraphEdge> DspGraph<T, Edge> {
             return Err("Destination node does not exist");
         }
 
-        let channel_layout = match channel_layout {
+        let channel_selection = match channel_selection {
             None => None,
-            Some(layout) => {
-                let mut channel_layout = layout;
+            Some(selection) => {
+                let mut channel_selection = selection;
 
                 if from_index != self.input_node {
                     let source_buffer_channels = self.buffers[from_index.index()]
                         .as_ref()
                         .unwrap()
                         .num_channels();
-                    channel_layout.clamp(source_buffer_channels);
+                    channel_selection.clamp(source_buffer_channels);
                 }
 
                 if to_index != self.output_node {
@@ -363,13 +363,13 @@ impl<T: Sample, Edge: GraphEdge> DspGraph<T, Edge> {
                         .as_ref()
                         .unwrap()
                         .num_channels();
-                    channel_layout.clamp(destination_buffer_channels);
+                    channel_selection.clamp(destination_buffer_channels);
                 }
-                Some(channel_layout)
+                Some(channel_selection)
             }
         };
 
-        let edge = Edge::new(channel_layout);
+        let edge = Edge::new(channel_selection);
 
         let edge_index = match self.graph.find_edge(from_index, to_index) {
             Some(existing_edge_index) => {
@@ -462,7 +462,7 @@ impl<T: Sample, Edge: GraphEdge> DspGraph<T, Edge> {
             // If there are multiple inputs, sum them
             if num_incoming_edges > 1 {
                 self.summing_buffer.clear();
-                let mut channel_layout: Option<ChannelLayout> = None;
+                let mut channel_selection: Option<ChannelSelection> = None;
 
                 for edge in incoming_edges {
                     let input_node = edge.source();
@@ -473,7 +473,7 @@ impl<T: Sample, Edge: GraphEdge> DspGraph<T, Edge> {
                         self.buffers[input_buffer_index].as_ref().unwrap()
                     };
 
-                    let edge_layout = edge.weight().data().channel_layout.clone();
+                    let edge_selection = edge.weight().data().channel_selection.clone();
 
                     if Edge::SUPPORTS_REWIRE {
                         if let Some(rewire) = edge.weight().get_rewire() {
@@ -481,19 +481,20 @@ impl<T: Sample, Edge: GraphEdge> DspGraph<T, Edge> {
                                 buffer: input_buffer,
                                 rewire,
                             };
-                            self.summing_buffer.add(&rewired_buffer_view, &edge_layout);
+                            self.summing_buffer
+                                .add(&rewired_buffer_view, &edge_selection);
                         } else {
-                            self.summing_buffer.add(input_buffer, &edge_layout);
+                            self.summing_buffer.add(input_buffer, &edge_selection);
                         }
                     } else {
-                        self.summing_buffer.add(input_buffer, &edge_layout);
+                        self.summing_buffer.add(input_buffer, &edge_selection);
                     }
 
-                    if let Some(edge_layout) = &edge_layout {
-                        if let Some(existing_layout) = &mut channel_layout {
-                            existing_layout.combine(edge_layout);
+                    if let Some(edge_selection) = &edge_selection {
+                        if let Some(existing_selection) = &mut channel_selection {
+                            existing_selection.combine(edge_selection);
                         } else {
-                            channel_layout = Some(edge_layout.clone());
+                            channel_selection = Some(edge_selection.clone());
                         }
                     }
                 }
@@ -505,13 +506,13 @@ impl<T: Sample, Edge: GraphEdge> DspGraph<T, Edge> {
                 let mut context = ProcessingContext::create_unchecked(
                     &self.summing_buffer,
                     output_buffer,
-                    channel_layout,
+                    channel_selection,
                     num_frames,
                 );
 
                 processor_node.process(&mut context);
             } else if num_incoming_edges == 1 {
-                let (input_node, channel_layout, rewire_map) = {
+                let (input_node, channel_selection, rewire_map) = {
                     let edge = incoming_edges.next().unwrap();
                     let rewire = if Edge::SUPPORTS_REWIRE {
                         edge.weight().get_rewire().cloned()
@@ -520,7 +521,7 @@ impl<T: Sample, Edge: GraphEdge> DspGraph<T, Edge> {
                     };
                     (
                         edge.source(),
-                        edge.weight().data().channel_layout.clone(),
+                        edge.weight().data().channel_selection.clone(),
                         rewire,
                     )
                 };
@@ -549,7 +550,7 @@ impl<T: Sample, Edge: GraphEdge> DspGraph<T, Edge> {
                         let mut context = ProcessingContext::create_unchecked(
                             &rewired_buffer_view,
                             output_buffer,
-                            channel_layout,
+                            channel_selection,
                             num_frames,
                         );
                         processor_node.process(&mut context);
@@ -557,7 +558,7 @@ impl<T: Sample, Edge: GraphEdge> DspGraph<T, Edge> {
                         let mut context = ProcessingContext::create_unchecked(
                             input_buffer,
                             output_buffer,
-                            channel_layout,
+                            channel_selection,
                             num_frames,
                         );
                         processor_node.process(&mut context);
@@ -566,7 +567,7 @@ impl<T: Sample, Edge: GraphEdge> DspGraph<T, Edge> {
                     let mut context = ProcessingContext::create_unchecked(
                         input_buffer,
                         output_buffer,
-                        channel_layout,
+                        channel_selection,
                         num_frames,
                     );
                     processor_node.process(&mut context);
@@ -587,7 +588,7 @@ impl<T: Sample, Edge: GraphEdge> DspGraph<T, Edge> {
                 self.buffers[input_buffer_index].as_ref().unwrap()
             };
             // TODO: handle disconnected channels
-            output.add(node_buffer, &edge.weight().data().channel_layout.clone());
+            output.add(node_buffer, &edge.weight().data().channel_selection.clone());
         }
     }
 }
@@ -626,7 +627,7 @@ impl<T: Sample> RewireDspGraph<T> {
     ///     )
     ///     .unwrap();
     ///
-    /// // Connect nodes with default channel layout (i.e., all channels in order)
+    /// // Connect nodes with default channel selection (i.e., all channels in order)
     /// dsp_graph
     ///     .connect(GraphNode::Input, node1.into(), None)
     ///     .unwrap();
@@ -649,11 +650,11 @@ impl<T: Sample> RewireDspGraph<T> {
         rewire_mapping: &[(usize, usize)], // maps source channel to destination channel
     ) -> Result<(), AudioGraphError> {
         if let Some(edge) = self.graph.edge_weight_mut(edge_index) {
-            let mut channel_layout = ChannelLayout::new(0);
+            let mut channel_selection = ChannelSelection::new(0);
             let mut rewire = HashMap::new();
 
             for &(source, dest) in rewire_mapping {
-                channel_layout.connect(dest);
+                channel_selection.connect(dest);
 
                 // we flip (source, dest) to have logical to physical mapping
                 if rewire.insert(dest, source).is_some() {
@@ -661,7 +662,7 @@ impl<T: Sample> RewireDspGraph<T> {
                 }
             }
 
-            edge.data_mut().channel_layout = Some(channel_layout);
+            edge.data_mut().channel_selection = Some(channel_selection);
             edge.rewire = Some(rewire);
 
             Ok(())
@@ -674,7 +675,7 @@ impl<T: Sample> RewireDspGraph<T> {
     ///
     /// **NOT realtime-safe**
     ///
-    /// TODO: a valid channel layout is not established after removal!
+    /// TODO: a valid channel selection is not established after removal!
     pub fn remove_rewire(&mut self, edge_index: EdgeIndex) -> Result<(), AudioGraphError> {
         if let Some(edge) = self.graph.edge_weight_mut(edge_index) {
             edge.rewire = None;
@@ -811,7 +812,7 @@ mod tests {
             .connect(GraphNode::Input, fourty_two.into(), None)
             .unwrap();
 
-        let mut second_channel_only = ChannelLayout::new(0); // Start with no channels
+        let mut second_channel_only = ChannelSelection::new(0); // Start with no channels
         second_channel_only.connect(1);
 
         graph
@@ -914,14 +915,18 @@ mod tests {
 
         // Initial connection
         let input_edge = graph
-            .connect(GraphNode::Input, node_a.into(), Some(ChannelLayout::new(2)))
+            .connect(
+                GraphNode::Input,
+                node_a.into(),
+                Some(ChannelSelection::new(2)),
+            )
             .unwrap();
 
         let output_edge = graph
             .connect(
                 node_a.into(),
                 GraphNode::Output,
-                Some(ChannelLayout::new(2)),
+                Some(ChannelSelection::new(2)),
             )
             .unwrap();
 
@@ -935,19 +940,19 @@ mod tests {
         assert_eq!(output.channel(0).unwrap()[0], 1.0);
         assert_eq!(output.channel(1).unwrap()[0], 2.0);
 
-        // reconnect with different layout
+        // reconnect with different channel selection
         let new_input_edge = graph
             .connect(
                 GraphNode::Input,
                 node_a.into(),
-                Some(ChannelLayout::from_indices(&[0])), // Only channel 0
+                Some(ChannelSelection::from_indices(&[0])), // Only channel 0
             )
             .unwrap();
         let new_output_edge = graph
             .connect(
                 node_a.into(),
                 GraphNode::Output,
-                Some(ChannelLayout::from_indices(&[0])), // Only channel 0
+                Some(ChannelSelection::from_indices(&[0])), // Only channel 0
             )
             .unwrap();
 
@@ -963,14 +968,14 @@ mod tests {
             .connect(
                 GraphNode::Input,
                 node_a.into(),
-                Some(ChannelLayout::from_indices(&[1])), // Only channel 1
+                Some(ChannelSelection::from_indices(&[1])), // Only channel 1
             )
             .unwrap();
         graph
             .connect(
                 node_a.into(),
                 GraphNode::Output,
-                Some(ChannelLayout::from_indices(&[1])), // Only channel 1
+                Some(ChannelSelection::from_indices(&[1])), // Only channel 1
             )
             .unwrap();
 
