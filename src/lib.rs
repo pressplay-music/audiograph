@@ -149,7 +149,7 @@ impl GraphEdge for ProcessorChannel {
     fn new(channel_selection: Option<ChannelSelection>) -> Self {
         Self {
             data: EdgeData {
-                channel_selection: channel_selection,
+                channel_selection,
                 enabled: true,
             },
         }
@@ -177,7 +177,7 @@ impl GraphEdge for RewireProcessorChannel {
     fn new(channel_selection: Option<ChannelSelection>) -> Self {
         Self {
             data: EdgeData {
-                channel_selection: channel_selection,
+                channel_selection,
                 enabled: true,
             },
             rewire: None,
