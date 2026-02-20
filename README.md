@@ -3,7 +3,7 @@
 **A realtime audio processing graph library for Rust**
 
 > [!WARNING]
-> Not production ready yet!
+> Not production ready yet - breaking changes may occur, some features are not implemented yet, and the API is not fully stabilized.
 
 Audiograph provides abstractions for audio processors, audio buffers and channel routing, and enables the construction and management of directed signal processing graphs. Graph edges can explicitly encode the channel-based routing between processor nodes, allowing for flexible channel selection and reordering with minimal runtime overhead.
 
