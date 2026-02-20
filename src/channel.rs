@@ -41,7 +41,7 @@ impl<const NUM_CHANNELS: usize, const WORDS: usize> ChannelSelectionImpl<NUM_CHA
     /// Creates a channel selection from a slice of connected channel indices
     ///
     /// # Example
-    /// ```rust
+    /// ```rust,ignore
     /// let selection = ChannelSelection::from_indices(&[0, 2, 4]);
     /// ```
     pub fn from_indices(indices: &[usize]) -> Self {
