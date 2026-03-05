@@ -22,7 +22,7 @@ The most basic functionality is shown below. For more advanced usage, refer to t
 ### Create a graph instance
 
 ```rust
-use audiograph::{DspGraph, FrameSize};
+use audiograph::{BasicDspGraph, FrameSize};
 
 let num_channels = 2; // stereo
 let frame_size = FrameSize(256); // maximum number of samples per frame
@@ -32,7 +32,7 @@ let frame_size = FrameSize(256); // maximum number of samples per frame
 let max_num_edges = Some(20);
 
 // we use f32 as the sample type
-let mut dsp_graph = DspGraph::<f32>::new(num_channels, frame_size, max_num_edges);
+let mut dsp_graph = BasicDspGraph::<f32>::new(num_channels, frame_size, max_num_edges);
 ```
 
 ### Define a processing node
@@ -105,7 +105,7 @@ dsp_graph.process(&input_buffer, &mut output_buffer, frame_size);
 
 - Realtime safety is guaranteed for most of the graph operations, including processing and modifying the graph structure. Some methods are not realtime safe (currently e.g. the `rewire` method). These methods are documented as such. Some operations require audio buffers to be preallocated (such as adding nodes to the graph), which is the responsibility of the user of the library.
 
-- There is a maximum number of channels the `DspGraph` can process. The default value is 64, but it can be changed at compile time by setting the `MAX_CHANNELS` environment variable when building the library. It is not worth to make this value smaller. Higher values will introduce slightly more processing overhead.
+- There is a maximum number of channels a `DspGraph` can process. The default value is 64, but it can be changed at compile time by setting the `MAX_CHANNELS` environment variable when building the library. It is not worth to make this value smaller. Higher values will introduce slightly more processing overhead.
 
 - The directed graph structure is implemented using the `petgraph` crate (https://github.com/petgraph/petgraph).
 

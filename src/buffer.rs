@@ -1,4 +1,4 @@
-use crate::{channel::ChannelSelection, sample::Sample};
+use crate::{AudioGraphError, channel::ChannelSelection, sample::Sample};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -12,7 +12,6 @@ pub struct FrameSize(pub usize);
 /// your own custom buffer types as needed.
 pub trait AudioBuffer<T: Sample> {
     // TODO: add more creation methods
-    // TODO: clear() return type
     // TODO: method for deinterleaving
 
     /// Returns the number of channels in the buffer
@@ -30,15 +29,58 @@ pub trait AudioBuffer<T: Sample> {
     /// Clears the buffer, setting all samples to zero
     fn clear(&mut self);
 
-    /// Interleaves the audio buffer into the provided output slice.
-    /// TODO: bounds checking?
-    fn copy_to_interleaved(&self, output: &mut [T]) {
+    /// Interleaves the audio buffer into the provided output slice
+    ///
+    /// Returns the number of samples written to the output buffer or an error if the output buffer is too small.
+    fn copy_to_interleaved(&self, output: &mut [T]) -> Result<usize, AudioGraphError> {
+        let num_samples = self.num_channels() * self.num_frames().0;
+        if output.len() < num_samples {
+            return Err("Output buffer is too small");
+        }
+
         for channel in 0..self.num_channels() {
             let src_channel = self.channel(channel).unwrap();
             for (frame, &sample) in src_channel.iter().enumerate() {
                 output[frame * self.num_channels() + channel] = sample;
             }
         }
+
+        Ok(num_samples)
+    }
+
+    /// Copies interleaved audio data from the input slice into the deinterleaved buffer format
+    ///
+    /// Returns an erro if the number of channels or the size of the input buffer exceeds the capacity of this buffer.
+    /// Clears any remaining channels if num_channels is less than the number of channels in this buffer.
+    fn copy_from_interleaved(
+        &mut self,
+        input: &[T],
+        num_channels: usize,
+    ) -> Result<(), AudioGraphError> {
+        if num_channels > self.num_channels() {
+            return Err("Input channel count exceeds buffer channel count");
+        }
+
+        let max_num_samples = self.num_channels() * self.num_frames().0;
+        if input.len() > max_num_samples {
+            return Err("Input buffer is too large");
+        }
+
+        for channel in 0..num_channels {
+            let dst_channel = self.channel_mut(channel).unwrap();
+            for (frame, &sample) in input.iter().skip(channel).step_by(num_channels).enumerate() {
+                dst_channel[frame] = sample;
+            }
+        }
+
+        for channel in num_channels..self.num_channels() {
+            let dst_channel = self.channel_mut(channel).unwrap();
+            for sample in dst_channel.iter_mut() {
+                *sample = T::zero();
+            }
+        }
+
+        Ok(())
     }
 
     /// Sums channels from another buffer into this buffer, optionally using a channel selection to specify which channels to sum.
