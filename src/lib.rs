@@ -283,6 +283,14 @@ impl<T: Sample, Edge: GraphEdge> DspGraph<T, Edge> {
             return Err("Graph node capacity exceeded");
         }
 
+        if output_buffer.num_frames().0 > self.summing_buffer.num_frames().0 {
+            return Err("Output buffer frame size exceeds graph capacity");
+        }
+
+        if output_buffer.num_channels() > self.summing_buffer.num_channels() {
+            return Err("Output buffer channel count exceeds graph capacity");
+        }
+
         let node_index = self.graph.add_node(ProcessorNode::new(processor));
         let buffer_index = node_index.index();
 
