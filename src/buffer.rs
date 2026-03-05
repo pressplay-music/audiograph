@@ -47,26 +47,33 @@ pub trait AudioBuffer<T: Sample> {
 
     /// Copies interleaved audio data from the input slice into the deinterleaved buffer format
     ///
-    /// Returns an erro if the number of channels or the size of the input buffer exceeds the capacity of this buffer.
+    /// Returns the number of frames processed, or an error if the number of channels or the size
+    /// of the input buffer exceeds the capacity of this buffer.
     /// Clears any remaining channels if num_channels is less than the number of channels in this buffer.
+    /// Clears any remaining frames if the input provides fewer frames than the buffer capacity.
     fn copy_from_interleaved(
         &mut self,
         input: &[T],
         num_channels: usize,
-    ) -> Result<(), AudioGraphError> {
+    ) -> Result<FrameSize, AudioGraphError> {
         if num_channels > self.num_channels() {
             return Err("Input channel count exceeds buffer channel count");
         }
 
-        let max_num_samples = self.num_channels() * self.num_frames().0;
+        let max_num_samples = num_channels * self.num_frames().0;
         if input.len() > max_num_samples {
             return Err("Input buffer is too large");
         }
+
+        let num_frames_processed = input.len() / num_channels;
 
         for channel in 0..num_channels {
             let dst_channel = self.channel_mut(channel).unwrap();
             for (frame, &sample) in input.iter().skip(channel).step_by(num_channels).enumerate() {
                 dst_channel[frame] = sample;
+            }
+            for sample in dst_channel[num_frames_processed..].iter_mut() {
+                *sample = T::zero();
             }
         }
 
@@ -77,7 +84,7 @@ pub trait AudioBuffer<T: Sample> {
             }
         }
 
-        Ok(())
+        Ok(FrameSize(num_frames_processed))
     }
 
     /// Sums channels from another buffer into this buffer, optionally using a channel selection to specify which channels to sum.
