@@ -11,9 +11,6 @@ pub struct FrameSize(pub usize);
 /// for owned buffers and [`MultiChannelBufferView`] for non-owning views), but you can implement this trait for
 /// your own custom buffer types as needed.
 pub trait AudioBuffer<T: Sample> {
-    // TODO: add more creation methods
-    // TODO: method for deinterleaving
-
     /// Returns the number of channels in the buffer
     fn num_channels(&self) -> usize;
 
