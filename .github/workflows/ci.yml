@@ -164,4 +164,4 @@ jobs:
           key: ${{ runner.os }}-cargo-clippy-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Run clippy
-        run: cargo clippy --package pp-audiograph --all-features -- -D warnings
+        run: cargo clippy --workspace --all-features -- -D warnings
