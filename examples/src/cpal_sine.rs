@@ -100,7 +100,9 @@ fn main() {
 
                 dsp_graph.process(&input_buffer, &mut output_buffer, frame_size);
 
-                output_buffer.copy_to_interleaved(data);
+                output_buffer
+                    .copy_to_interleaved(data)
+                    .expect("output buffer size mismatch");
             },
             |err| eprintln!("Audio error: {}", err),
             None,
