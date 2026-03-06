@@ -9,7 +9,7 @@ repository = "https://github.com/pressplay-music/audiograph"
 readme = "README.md"
 keywords = ["audio", "dsp", "graph"]
 categories = ["multimedia::audio"]
-include = ["src/**", "Cargo.toml", "build.rs", "README.md", "LICENSE*"]
+include = ["src/**", "Cargo.toml", "build.rs", "README.md", "CHANGELOG.md", "LICENSE*"]
 
 [lib]
 name = "audiograph"
