@@ -300,8 +300,6 @@ impl<T: Sample, Edge: GraphEdge> DspGraph<T, Edge> {
 
         self.buffers[buffer_index] = Some(output_buffer);
 
-        self.topo_dirty = true; // TODO: only if connected?
-
         Ok(node_index)
     }
 
