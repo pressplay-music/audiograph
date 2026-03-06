@@ -76,7 +76,7 @@ dependencies = [
 
 [[package]]
 name = "audiograph-examples"
-version = "0.2.0"
+version = "0.1.0"
 dependencies = [
  "clap",
  "cpal",
@@ -591,7 +591,7 @@ checksum = "7edddbd0b52d732b21ad9a5fab5c704c14cd949e5e9a1ec5929a24fded1b904c"
 
 [[package]]
 name = "pp-audiograph"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bitvec",
  "num",
