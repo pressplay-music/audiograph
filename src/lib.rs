@@ -676,14 +676,13 @@ impl<T: Sample> RewireDspGraph<T> {
         }
     }
 
-    /// Removes rewiring from an existing connection
+    /// Removes rewiring from an existing connection, reverting to the default channel selection (i.e. all channels connected)
     ///
     /// **NOT realtime-safe**
-    ///
-    /// TODO: a valid channel selection is not established after removal!
     pub fn remove_rewire(&mut self, edge_index: EdgeIndex) -> Result<(), AudioGraphError> {
         if let Some(edge) = self.graph.edge_weight_mut(edge_index) {
             edge.rewire = None;
+            edge.data.channel_selection = None;
             Ok(())
         } else {
             Err("Edge not found")
