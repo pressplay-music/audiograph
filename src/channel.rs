@@ -1,5 +1,7 @@
 use bitvec::{array::BitArray, slice::IterOnes};
 
+use crate::AudioGraphError;
+
 include!(concat!(env!("OUT_DIR"), "/constants.rs"));
 
 const WORDS: usize = (MAX_CHANNELS - 1) / 64 + 1;
@@ -28,7 +30,6 @@ impl<const NUM_CHANNELS: usize, const WORDS: usize> Default
     }
 }
 
-// TODO: disconnect()
 impl<const NUM_CHANNELS: usize, const WORDS: usize> ChannelSelectionImpl<NUM_CHANNELS, WORDS> {
     /// Creates a channel selection with the first `num_connected` channels connected and remaining channels disconnected
     pub fn new(num_connected: usize) -> Self {
@@ -47,17 +48,30 @@ impl<const NUM_CHANNELS: usize, const WORDS: usize> ChannelSelectionImpl<NUM_CHA
     pub fn from_indices(indices: &[usize]) -> Self {
         let mut selection = ChannelSelectionImpl::new(0);
         for &index in indices {
-            selection.connect(index);
+            selection
+                .connect(index)
+                .expect("Channel index is out of bounds");
         }
         selection
     }
 
     /// Defines a specific channel as selected / connected
-    // TODO: return Result
-    pub fn connect(&mut self, channel: usize) {
-        if channel < NUM_CHANNELS {
-            self.bits.set(channel, true);
+    pub fn connect(&mut self, channel: usize) -> Result<(), AudioGraphError> {
+        if channel >= NUM_CHANNELS {
+            return Err("Channel index is out of bounds");
         }
+
+        self.bits.set(channel, true);
+        Ok(())
+    }
+
+    pub fn disconnect(&mut self, channel: usize) -> Result<(), AudioGraphError> {
+        if channel >= NUM_CHANNELS {
+            return Err("Channel index is out of bounds");
+        }
+
+        self.bits.set(channel, false);
+        Ok(())
     }
 
     /// Checks if a specifc channel is selected / connected

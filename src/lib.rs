@@ -595,7 +595,6 @@ impl<T: Sample, Edge: GraphEdge> DspGraph<T, Edge> {
                 let input_buffer_index = node.index();
                 self.buffers[input_buffer_index].as_ref().unwrap()
             };
-            // TODO: handle disconnected channels
             output.add(node_buffer, &edge.weight().data().channel_selection.clone());
         }
     }
@@ -662,7 +661,7 @@ impl<T: Sample> RewireDspGraph<T> {
             let mut rewire = HashMap::new();
 
             for &(source, dest) in rewire_mapping {
-                channel_selection.connect(dest);
+                channel_selection.connect(dest)?;
 
                 // we flip (source, dest) to have logical to physical mapping
                 if rewire.insert(dest, source).is_some() {
@@ -821,7 +820,7 @@ mod tests {
             .unwrap();
 
         let mut second_channel_only = ChannelSelection::new(0); // Start with no channels
-        second_channel_only.connect(1);
+        second_channel_only.connect(1).unwrap();
 
         graph
             .connect(
