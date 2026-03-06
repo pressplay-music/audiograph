@@ -65,7 +65,7 @@ pub trait AudioBuffer<T: Sample> {
             return Ok(FrameSize(0));
         }
 
-        if input.len() % num_channels != 0 {
+        if !input.len().is_multiple_of(num_channels) {
             return Err("Input buffer size must be a multiple of the number of channels");
         }
 
