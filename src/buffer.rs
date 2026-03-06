@@ -50,7 +50,7 @@ pub trait AudioBuffer<T: Sample> {
     /// Returns the number of frames processed, or an error if the number of channels or the size
     /// of the input buffer exceeds the capacity of this buffer.
     /// Clears any remaining channels if num_channels is less than the number of channels in this buffer.
-    /// Clears any remaining frames if the input provides fewer frames than the buffer capacity.
+    /// Errors out if the provided input buffer size is not a multiple of the provided number of channels.
     fn copy_from_interleaved(
         &mut self,
         input: &[T],
@@ -58,6 +58,15 @@ pub trait AudioBuffer<T: Sample> {
     ) -> Result<FrameSize, AudioGraphError> {
         if num_channels > self.num_channels() {
             return Err("Input channel count exceeds buffer channel count");
+        }
+
+        if num_channels == 0 {
+            self.clear();
+            return Ok(FrameSize(0));
+        }
+
+        if !input.len().is_multiple_of(num_channels) {
+            return Err("Input buffer size must be a multiple of the number of channels");
         }
 
         let max_num_samples = num_channels * self.num_frames().0;
@@ -71,9 +80,6 @@ pub trait AudioBuffer<T: Sample> {
             let dst_channel = self.channel_mut(channel).unwrap();
             for (frame, &sample) in input.iter().skip(channel).step_by(num_channels).enumerate() {
                 dst_channel[frame] = sample;
-            }
-            for sample in dst_channel[num_frames_processed..].iter_mut() {
-                *sample = T::zero();
             }
         }
 

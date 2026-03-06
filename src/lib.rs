@@ -300,8 +300,6 @@ impl<T: Sample, Edge: GraphEdge> DspGraph<T, Edge> {
 
         self.buffers[buffer_index] = Some(output_buffer);
 
-        self.topo_dirty = true; // TODO: only if connected?
-
         Ok(node_index)
     }
 
@@ -595,7 +593,6 @@ impl<T: Sample, Edge: GraphEdge> DspGraph<T, Edge> {
                 let input_buffer_index = node.index();
                 self.buffers[input_buffer_index].as_ref().unwrap()
             };
-            // TODO: handle disconnected channels
             output.add(node_buffer, &edge.weight().data().channel_selection.clone());
         }
     }
@@ -662,7 +659,7 @@ impl<T: Sample> RewireDspGraph<T> {
             let mut rewire = HashMap::new();
 
             for &(source, dest) in rewire_mapping {
-                channel_selection.connect(dest);
+                channel_selection.connect(dest)?;
 
                 // we flip (source, dest) to have logical to physical mapping
                 if rewire.insert(dest, source).is_some() {
@@ -679,14 +676,13 @@ impl<T: Sample> RewireDspGraph<T> {
         }
     }
 
-    /// Removes rewiring from an existing connection
+    /// Removes rewiring from an existing connection, reverting to the default channel selection (i.e. all channels connected)
     ///
     /// **NOT realtime-safe**
-    ///
-    /// TODO: a valid channel selection is not established after removal!
     pub fn remove_rewire(&mut self, edge_index: EdgeIndex) -> Result<(), AudioGraphError> {
         if let Some(edge) = self.graph.edge_weight_mut(edge_index) {
             edge.rewire = None;
+            edge.data.channel_selection = None;
             Ok(())
         } else {
             Err("Edge not found")
@@ -821,7 +817,7 @@ mod tests {
             .unwrap();
 
         let mut second_channel_only = ChannelSelection::new(0); // Start with no channels
-        second_channel_only.connect(1);
+        second_channel_only.connect(1).unwrap();
 
         graph
             .connect(
